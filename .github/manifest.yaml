@@ -38,4 +38,11 @@ ci:
             workflow: .github/workflows/deploy-web.yaml
             triggers:
               - apps/web/**
-  state: {}
+  state:
+    components:
+      api:
+        dev:
+          sha: 4fc8132b279a1144d455663d69352be9dd306d7a
+          version: api-0.1.0-rc.0
+          committed_at: "2026-07-08T19:40:18Z"
+          committed_by: joshua-temple
