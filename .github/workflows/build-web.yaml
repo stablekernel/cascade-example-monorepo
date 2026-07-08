@@ -1,0 +1,41 @@
+name: build-web
+# Stub build callback for the web component.
+# Caller: cascade orchestrate-web job via uses: ./.github/workflows/build-web.yaml
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Target environment for the build
+        required: false
+        type: string
+      sha:
+        description: Commit SHA being built
+        required: false
+        type: string
+      version:
+        description: Version tag to attach to the artifact
+        required: false
+        type: string
+      target_env:
+        description: Hotfix target environment
+        required: false
+        type: string
+    outputs:
+      artifact:
+        description: Identifier for the built web artifact
+        value: ${{ jobs.build.outputs.artifact }}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      artifact: ${{ steps.build.outputs.artifact }}
+    steps:
+      - id: build
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          SHA: ${{ inputs.sha }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          echo "Building web version=${VERSION:-dev} sha=${SHA:-local} env=${ENVIRONMENT}"
+          echo "artifact=web-${SHA:-local}" >> "$GITHUB_OUTPUT"

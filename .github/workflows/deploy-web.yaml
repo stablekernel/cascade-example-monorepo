@@ -1,0 +1,30 @@
+name: deploy-web
+# Stub deploy callback for the web component.
+# Caller: cascade orchestrate-web / promote-web job via uses: ./.github/workflows/deploy-web.yaml
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Target environment
+        required: false
+        type: string
+      sha:
+        description: Commit SHA to deploy
+        required: false
+        type: string
+      version:
+        description: Semantic version to deploy
+        required: false
+        type: string
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - id: deploy
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          SHA: ${{ inputs.sha }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          echo "Deploying web version=${VERSION:-dev} sha=${SHA:-local} env=${ENVIRONMENT}"
