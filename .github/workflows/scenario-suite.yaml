@@ -270,22 +270,21 @@ jobs:
           fi
           echo "OK: api dev=$API_DEV, web subtree untouched"
 
-      - name: Promote api through the remaining ladder
+      # api rides the dev -> staging -> prod ladder one hop per dispatch, the
+      # same way the single-component 3env suite drives its ladder: a
+      # mode=default dispatch advances exactly one environment, so reaching prod
+      # takes an explicit dev-to-staging hop followed by a staging-to-prod hop,
+      # each awaited before the next. A single mode=default dispatch would stop
+      # at staging and never populate api.prod.
+      - name: Promote api dev to staging
+        id: promote_api_staging
         env:
           GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
         run: |
           set -euo pipefail
-          DISPATCH_SINCE=$(date -u -d '60 seconds ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+          PROMOTE_SINCE=$(date -u -d '60 seconds ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
             || date -u -v-60S +%Y-%m-%dT%H:%M:%SZ)
-          echo "PROMOTE_SINCE=$DISPATCH_SINCE" >> "$GITHUB_ENV"
-          gh workflow run promote-api.yaml -f mode=default --ref main
-
-      - name: Wait for promote-api to complete
-        id: wait_promote_api
-        env:
-          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
-        run: |
-          set -euo pipefail
+          gh workflow run promote-api.yaml -f mode=dev-to-staging --ref main
           MAX_ATTEMPTS=10
           ATTEMPT=0
           RUN_ID=""
@@ -298,18 +297,78 @@ jobs:
             [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ] && sleep 60
           done
           if [ -z "$RUN_ID" ]; then
-            echo "::error::promote-api.yaml run did not appear within timeout"
+            echo "::error::promote-api dev-to-staging run did not appear within timeout"
             exit 1
           fi
           gh run watch "$RUN_ID" --exit-status --interval 60
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
 
-      - name: Register promote-api run
+      - name: Register promote-api dev-to-staging run
         uses: stablekernel/cascade/.github/actions/register-run@main
         with:
-          run-id: ${{ steps.wait_promote_api.outputs.run_id }}
+          run-id: ${{ steps.promote_api_staging.outputs.run_id }}
           expected-conclusion: success
-          reason: advance-api-promote
+          reason: advance-api-promote-dev-to-staging
+          upload: 'true'
+
+      - name: Assert api reached staging and web is still untouched
+        run: |
+          set -euo pipefail
+          MAX_ATTEMPTS=3
+          ATTEMPT=0
+          API_STAGING=""
+          while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
+            git fetch origin main --quiet
+            git reset --hard origin/main
+            API_STAGING=$(yq eval '.ci.state.components.api.staging.version // ""' .github/manifest.yaml)
+            [ -n "$API_STAGING" ] && break
+            ATTEMPT=$((ATTEMPT + 1))
+            sleep 60
+          done
+          if ! echo "$API_STAGING" | grep -qE '^api-[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::api did not advance to staging on its own line: '$API_STAGING'"
+            exit 1
+          fi
+          WEB_STATE=$(yq eval '.ci.state.components.web // "ABSENT"' .github/manifest.yaml)
+          if [ "$WEB_STATE" != "ABSENT" ]; then
+            echo "::error::web state subtree changed while only api advanced: $WEB_STATE"
+            exit 1
+          fi
+          echo "OK: api staging=$API_STAGING, web subtree untouched"
+
+      - name: Promote api staging to prod
+        id: promote_api_prod
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          PROMOTE_SINCE=$(date -u -d '60 seconds ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+            || date -u -v-60S +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run promote-api.yaml -f mode=staging-to-prod --ref main
+          MAX_ATTEMPTS=10
+          ATTEMPT=0
+          RUN_ID=""
+          while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
+            RUN_ID=$(gh run list --workflow=promote-api.yaml --branch=main \
+              --created=">=$PROMOTE_SINCE" --limit=1 \
+              --json=databaseId --jq='.[0].databaseId // empty' 2>/dev/null || echo "")
+            [ -n "$RUN_ID" ] && break
+            ATTEMPT=$((ATTEMPT + 1))
+            [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ] && sleep 60
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::promote-api staging-to-prod run did not appear within timeout"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Register promote-api staging-to-prod run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.promote_api_prod.outputs.run_id }}
+          expected-conclusion: success
+          reason: advance-api-promote-staging-to-prod
           upload: 'true'
 
       - name: Assert api reached prod and web is still untouched
@@ -518,6 +577,117 @@ jobs:
             exit 1
           fi
           echo "OK: web dev=$WEB_DEV advanced independently; api prod=$API_PROD_AFTER preserved"
+
+      # Drive web the rest of the way to prod on its own line, one hop per
+      # dispatch, exactly as api did. api's already-published state must survive
+      # every hop.
+      - name: Promote web dev to staging
+        id: promote_web_staging
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          PROMOTE_SINCE=$(date -u -d '60 seconds ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+            || date -u -v-60S +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run promote-web.yaml -f mode=dev-to-staging --ref main
+          MAX_ATTEMPTS=10
+          ATTEMPT=0
+          RUN_ID=""
+          while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
+            RUN_ID=$(gh run list --workflow=promote-web.yaml --branch=main \
+              --created=">=$PROMOTE_SINCE" --limit=1 \
+              --json=databaseId --jq='.[0].databaseId // empty' 2>/dev/null || echo "")
+            [ -n "$RUN_ID" ] && break
+            ATTEMPT=$((ATTEMPT + 1))
+            [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ] && sleep 60
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::promote-web dev-to-staging run did not appear within timeout"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Register promote-web dev-to-staging run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.promote_web_staging.outputs.run_id }}
+          expected-conclusion: success
+          reason: advance-web-promote-dev-to-staging
+          upload: 'true'
+
+      - name: Promote web staging to prod
+        id: promote_web_prod
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          PROMOTE_SINCE=$(date -u -d '60 seconds ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+            || date -u -v-60S +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run promote-web.yaml -f mode=staging-to-prod --ref main
+          MAX_ATTEMPTS=10
+          ATTEMPT=0
+          RUN_ID=""
+          while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
+            RUN_ID=$(gh run list --workflow=promote-web.yaml --branch=main \
+              --created=">=$PROMOTE_SINCE" --limit=1 \
+              --json=databaseId --jq='.[0].databaseId // empty' 2>/dev/null || echo "")
+            [ -n "$RUN_ID" ] && break
+            ATTEMPT=$((ATTEMPT + 1))
+            [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ] && sleep 60
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::promote-web staging-to-prod run did not appear within timeout"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Register promote-web staging-to-prod run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.promote_web_prod.outputs.run_id }}
+          expected-conclusion: success
+          reason: advance-web-promote-staging-to-prod
+          upload: 'true'
+
+      - name: Assert web reached prod and api's published state survived
+        env:
+          API_PROD_BEFORE: ${{ steps.api_before.outputs.api_prod }}
+        run: |
+          set -euo pipefail
+          MAX_ATTEMPTS=3
+          ATTEMPT=0
+          WEB_PROD=""
+          while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
+            git fetch origin main --quiet
+            git reset --hard origin/main
+            WEB_PROD=$(yq eval '.ci.state.components.web.prod.version // ""' .github/manifest.yaml)
+            [ -n "$WEB_PROD" ] && break
+            ATTEMPT=$((ATTEMPT + 1))
+            sleep 60
+          done
+          if ! echo "$WEB_PROD" | grep -qE '^web-[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::web did not advance to prod on its own line: '$WEB_PROD'"
+            exit 1
+          fi
+          API_PROD_AFTER=$(yq eval '.ci.state.components.api.prod.version // ""' .github/manifest.yaml)
+          if [ "$API_PROD_AFTER" != "$API_PROD_BEFORE" ]; then
+            echo "::error::api prod version changed while web advanced to prod: before='$API_PROD_BEFORE' after='$API_PROD_AFTER'"
+            exit 1
+          fi
+          # Both namespaces coexist: web now has a prod release on the web- line
+          # and api's api- tags are still present and untouched.
+          git fetch --tags --quiet || true
+          if [ -z "$(git tag -l 'web-*')" ]; then
+            echo "::error::no web- tag exists after advancing web to prod"
+            exit 1
+          fi
+          if [ -z "$(git tag -l 'api-*')" ]; then
+            echo "::error::api- tags disappeared while advancing web to prod"
+            exit 1
+          fi
+          echo "OK: web prod=$WEB_PROD; api prod=$API_PROD_AFTER preserved; both namespaces coexist"
 
       - name: Final snapshot - both components coexist on independent lines
         if: always()
