@@ -705,9 +705,255 @@ jobs:
             echo "| web | $(yq eval '.ci.state.components.web.dev.version // "~"' .github/manifest.yaml) | $(yq eval '.ci.state.components.web.staging.version // "~"' .github/manifest.yaml) | $(yq eval '.ci.state.components.web.prod.version // "~"' .github/manifest.yaml) |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  wave:
+    name: Shared-path wave - one commit fires both components concurrently
+    runs-on: ubuntu-latest
+    needs: advance-web
+    steps:
+      - name: Install gh transient-retry wrapper
+        run: |
+          cat > "$RUNNER_TEMP/gh-retry.sh" <<'GHRETRY'
+          _gh_is_transient() {
+            local out="$1"
+            if printf '%s' "$out" | grep -qiE 'HTTP 5[0-9][0-9]|HTTP 429|HTTP 401|Bad credentials|was submitted too quickly|secondary rate limit'; then
+              return 0
+            fi
+            if printf '%s' "$out" | grep -qiE 'HTTP 403'; then
+              if printf '%s' "$out" | grep -qiE 'rate limit|secondary|abuse|too quickly'; then
+                return 0
+              fi
+            fi
+            return 1
+          }
+          gh() {
+            local attempt=1 max="${GH_RETRY_MAX:-5}" delay="${GH_RETRY_BASE_DELAY:-3}" out rc
+            while :; do
+              out="$(command gh "$@" 2>&1)" && rc=0 || rc=$?
+              if [ "$rc" -eq 0 ]; then
+                printf '%s\n' "$out"
+                return 0
+              fi
+              if [ "$attempt" -ge "$max" ] || ! _gh_is_transient "$out"; then
+                printf '%s\n' "$out" >&2
+                return "$rc"
+              fi
+              printf 'gh: transient error on attempt %d/%d, retrying in %ds\n%s\n' "$attempt" "$max" "$delay" "$out" >&2
+              sleep "$delay"
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+          }
+          GHRETRY
+          echo "BASH_ENV=$RUNNER_TEMP/gh-retry.sh" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+          ref: main
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # A change to the shared library both components consume must advance BOTH
+      # component lines. Because orchestrate-api and orchestrate-web each watch
+      # libs/common/** and run under their own per-component concurrency group,
+      # one trunk commit fans out to two orchestrate runs that execute at the
+      # same time and write the same ci.state file concurrently. The proof is
+      # postcondition-based and interleaving-independent: both dev lines advance,
+      # both tag namespaces gain a fresh rc, and no run exhausts the state-write
+      # retry ceiling. That is the guarantee the concurrent-write re-apply gives:
+      # the two writers converge rather than one clobbering the other.
+      - name: Capture both dev lines before the shared change
+        id: before
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          git reset --hard origin/main
+          API_DEV_BEFORE=$(yq eval '.ci.state.components.api.dev.version // ""' .github/manifest.yaml)
+          WEB_DEV_BEFORE=$(yq eval '.ci.state.components.web.dev.version // ""' .github/manifest.yaml)
+          if [ -z "$API_DEV_BEFORE" ] || [ -z "$WEB_DEV_BEFORE" ]; then
+            echo "::error::both dev lines must be seeded before the wave: api='$API_DEV_BEFORE' web='$WEB_DEV_BEFORE'"
+            exit 1
+          fi
+          echo "api_dev_before=$API_DEV_BEFORE" >> "$GITHUB_OUTPUT"
+          echo "web_dev_before=$WEB_DEV_BEFORE" >> "$GITHUB_OUTPUT"
+          echo "before: api dev=$API_DEV_BEFORE web dev=$WEB_DEV_BEFORE"
+
+      - name: Seed ONE shared-library change via pull request
+        id: seed
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="scenario/shared-$(date +%s)-$RANDOM"
+          git fetch origin main --quiet
+          git checkout -B "$BRANCH" origin/main
+          # Touch ONLY libs/common/** so neither component's own path changes.
+          # The shared path is in both orchestrate path filters, so this single
+          # commit fires orchestrate-api AND orchestrate-web off the same sha.
+          mkdir -p libs/common
+          echo "revision=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" > libs/common/version.txt
+          git add libs/common/version.txt
+          git commit --no-gpg-sign -m "feat: shared library change for both components"
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "feat: shared library change for both components" \
+            --body "Automated scenario run; one shared-path commit drives both orchestrate workflows concurrently."
+          gh pr merge "$BRANCH" --rebase --delete-branch
+          git fetch origin main --quiet
+          MERGE_SHA=$(git rev-parse origin/main)
+          echo "merge_sha=$MERGE_SHA" >> "$GITHUB_OUTPUT"
+          echo "shared commit merged as $MERGE_SHA"
+
+      - name: Resolve both orchestrate runs off the shared commit
+        id: runs
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          MERGE_SHA: ${{ steps.seed.outputs.merge_sha }}
+        run: |
+          set -euo pipefail
+          resolve() {
+            local wf="$1" run_id="" attempt=0
+            while [ "$attempt" -lt 10 ]; do
+              run_id=$(gh run list --workflow="$wf" --branch=main \
+                --json=databaseId,headSha \
+                --jq=".[] | select(.headSha==\"$MERGE_SHA\") | .databaseId" 2>/dev/null | head -n1)
+              [ -n "$run_id" ] && break
+              attempt=$((attempt + 1))
+              [ "$attempt" -lt 10 ] && sleep 60
+            done
+            printf '%s' "$run_id"
+          }
+          API_RUN=$(resolve orchestrate-api.yaml)
+          WEB_RUN=$(resolve orchestrate-web.yaml)
+          if [ -z "$API_RUN" ] || [ -z "$WEB_RUN" ]; then
+            echo "::error::one shared commit did not fan out to both orchestrate runs: api='$API_RUN' web='$WEB_RUN'"
+            exit 1
+          fi
+          echo "api_run=$API_RUN" >> "$GITHUB_OUTPUT"
+          echo "web_run=$WEB_RUN" >> "$GITHUB_OUTPUT"
+          echo "both fired off $MERGE_SHA: orchestrate-api=$API_RUN orchestrate-web=$WEB_RUN"
+
+      - name: Wait for both orchestrate runs to complete
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          API_RUN: ${{ steps.runs.outputs.api_run }}
+          WEB_RUN: ${{ steps.runs.outputs.web_run }}
+        run: |
+          set -euo pipefail
+          # Both were dispatched by the same push and run concurrently on GitHub.
+          # Watching them one after the other simply blocks until each concludes.
+          gh run watch "$API_RUN" --exit-status --interval 60
+          gh run watch "$WEB_RUN" --exit-status --interval 60
+
+      - name: Register orchestrate-api wave run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.runs.outputs.api_run }}
+          expected-conclusion: success
+          reason: wave-orchestrate-api
+          upload: 'true'
+
+      - name: Register orchestrate-web wave run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.runs.outputs.web_run }}
+          expected-conclusion: success
+          reason: wave-orchestrate-web
+          upload: 'true'
+
+      - name: Assert convergence without exhausting the state-write ceiling
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          API_RUN: ${{ steps.runs.outputs.api_run }}
+          WEB_RUN: ${{ steps.runs.outputs.web_run }}
+          API_DEV_BEFORE: ${{ steps.before.outputs.api_dev_before }}
+          WEB_DEV_BEFORE: ${{ steps.before.outputs.web_dev_before }}
+        run: |
+          set -euo pipefail
+
+          # 1) Both concurrent writers converged: each dev line advanced past its
+          #    pre-wave value and stayed on its own tag line. Neither write was
+          #    lost, which is exactly what a clobber would have caused.
+          git fetch origin main --quiet
+          git reset --hard origin/main
+          API_DEV_AFTER=$(yq eval '.ci.state.components.api.dev.version // ""' .github/manifest.yaml)
+          WEB_DEV_AFTER=$(yq eval '.ci.state.components.web.dev.version // ""' .github/manifest.yaml)
+          if ! echo "$API_DEV_AFTER" | grep -qE '^api-[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::api dev line missing or off its line after the wave: '$API_DEV_AFTER'"
+            exit 1
+          fi
+          if ! echo "$WEB_DEV_AFTER" | grep -qE '^web-[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::web dev line missing or off its line after the wave: '$WEB_DEV_AFTER'"
+            exit 1
+          fi
+          if [ "$API_DEV_AFTER" = "$API_DEV_BEFORE" ]; then
+            echo "::error::api dev line did not advance on the shared change: still '$API_DEV_AFTER'"
+            exit 1
+          fi
+          if [ "$WEB_DEV_AFTER" = "$WEB_DEV_BEFORE" ]; then
+            echo "::error::web dev line did not advance on the shared change: still '$WEB_DEV_AFTER'"
+            exit 1
+          fi
+
+          # 2) Both tag namespaces gained the freshly computed dev rc.
+          git fetch --tags --quiet || true
+          if ! git rev-parse -q --verify "refs/tags/$API_DEV_AFTER" >/dev/null; then
+            echo "::error::no tag for the new api dev version '$API_DEV_AFTER'"
+            exit 1
+          fi
+          if ! git rev-parse -q --verify "refs/tags/$WEB_DEV_AFTER" >/dev/null; then
+            echo "::error::no tag for the new web dev version '$WEB_DEV_AFTER'"
+            exit 1
+          fi
+
+          # 3) The load-bearing proof: neither concurrent writer exhausted the
+          #    re-apply retry ceiling. The hardened path re-applies its state
+          #    delta onto the latest trunk and retries on a losing push; if it
+          #    ever gave up it would log the exhausted marker. Its absence, plus
+          #    the presence of the attempt marker, proves the writers retried and
+          #    converged rather than hard-failing or clobbering.
+          for pair in "api:$API_RUN" "web:$WEB_RUN"; do
+            name="${pair%%:*}"
+            run_id="${pair#*:}"
+            log="$(gh run view "$run_id" --log 2>/dev/null || true)"
+            if printf '%s' "$log" | grep -q 'cascade-state-write: exhausted'; then
+              echo "::error::$name orchestrate exhausted the state-write retry ceiling"
+              printf '%s\n' "$log" | grep 'cascade-state-write:' || true
+              exit 1
+            fi
+            if ! printf '%s' "$log" | grep -q 'cascade-state-write: attempt='; then
+              echo "::error::$name orchestrate never emitted a state-write attempt marker"
+              exit 1
+            fi
+            echo "$name state-write markers:"
+            printf '%s\n' "$log" | grep 'cascade-state-write:' || true
+          done
+
+          echo "OK: shared change advanced api $API_DEV_BEFORE -> $API_DEV_AFTER and web $WEB_DEV_BEFORE -> $WEB_DEV_AFTER; both converged, neither exhausted"
+
+      - name: Wave snapshot
+        if: always()
+        run: |
+          {
+            echo "## Shared-path wave snapshot"
+            echo ""
+            echo "One commit to libs/common/** fired orchestrate-api and orchestrate-web concurrently."
+            echo ""
+            echo "| Component | dev before | dev after |"
+            echo "|-----------|------------|-----------|"
+            echo "| api | ${{ steps.before.outputs.api_dev_before }} | $(yq eval '.ci.state.components.api.dev.version // "~"' .github/manifest.yaml) |"
+            echo "| web | ${{ steps.before.outputs.web_dev_before }} | $(yq eval '.ci.state.components.web.dev.version // "~"' .github/manifest.yaml) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   reconcile:
     name: Reconcile scenario-window runs
-    needs: [reset, advance-api, advance-web]
+    needs: [reset, advance-api, advance-web, wave]
     if: always()
     uses: stablekernel/cascade/.github/workflows/fleet-reconcile.yaml@main
     permissions:

@@ -11,6 +11,8 @@ ci:
         state_token: ${{ secrets.CASCADE_STATE_TOKEN }}
         manifest_file: .github/manifest.yaml
         manifest_key: ci
+        shared_paths:
+            - libs/common/**
         components:
             api:
                 path: services/api
