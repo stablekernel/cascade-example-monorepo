@@ -934,9 +934,1158 @@ jobs:
             echo "| web | ${{ steps.before.outputs.web_dev_before }} | $(yq eval '.ci.state.components.web.dev.version // "~"' .github/manifest.yaml) |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  hotfix-subenv-api:
+    name: Hotfix api staging - web subtree, branches and guard stay untouched
+    runs-on: ubuntu-latest
+    needs: wave
+    steps:
+      - name: Install gh transient-retry wrapper
+        run: |
+          cat > "$RUNNER_TEMP/gh-retry.sh" <<'GHRETRY'
+          _gh_is_transient() {
+            local out="$1"
+            if printf '%s' "$out" | grep -qiE 'HTTP 5[0-9][0-9]|HTTP 429|HTTP 401|Bad credentials|was submitted too quickly|secondary rate limit'; then
+              return 0
+            fi
+            if printf '%s' "$out" | grep -qiE 'HTTP 403'; then
+              if printf '%s' "$out" | grep -qiE 'rate limit|secondary|abuse|too quickly'; then
+                return 0
+              fi
+            fi
+            return 1
+          }
+          gh() {
+            local attempt=1 max="${GH_RETRY_MAX:-5}" delay="${GH_RETRY_BASE_DELAY:-3}" out rc
+            while :; do
+              out="$(command gh "$@" 2>&1)" && rc=0 || rc=$?
+              if [ "$rc" -eq 0 ]; then
+                printf '%s\n' "$out"
+                return 0
+              fi
+              if [ "$attempt" -ge "$max" ] || ! _gh_is_transient "$out"; then
+                printf '%s\n' "$out" >&2
+                return "$rc"
+              fi
+              printf 'gh: transient error on attempt %d/%d, retrying in %ds\n%s\n' "$attempt" "$max" "$delay" "$out" >&2
+              sleep "$delay"
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+          }
+          GHRETRY
+          echo "BASH_ENV=$RUNNER_TEMP/gh-retry.sh" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # Capture web's entire published subtree plus its branch and tag namespaces
+      # before we touch api. Every isolation assertion below reads back against
+      # this baseline: hotfixing api must not move a single web leaf, must not
+      # create an env/web/* integration branch, and must not diverge web.
+      - name: Capture web baseline and api staging precondition
+        id: baseline
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          git reset --hard origin/main
+          API_STAGING=$(yq eval '.ci.state.components.api.staging.version // ""' .github/manifest.yaml)
+          if [ -z "$API_STAGING" ]; then
+            echo "::error::api staging must be published before a staging hotfix; got empty"
+            exit 1
+          fi
+          {
+            echo "web_dev=$(yq eval '.ci.state.components.web.dev.version // "~"' .github/manifest.yaml)"
+            echo "web_staging=$(yq eval '.ci.state.components.web.staging.version // "~"' .github/manifest.yaml)"
+            echo "web_prod=$(yq eval '.ci.state.components.web.prod.version // "~"' .github/manifest.yaml)"
+            echo "web_prod_sha=$(yq eval '.ci.state.components.web.prod.sha // "~"' .github/manifest.yaml)"
+            echo "api_prod=$(yq eval '.ci.state.components.api.prod.version // "~"' .github/manifest.yaml)"
+          } >> "$GITHUB_OUTPUT"
+          git fetch origin '+refs/heads/env/*:refs/remotes/origin/env/*' --quiet 2>/dev/null || true
+          echo "web baseline captured; api staging=$API_STAGING"
+
+      - name: Seed an api trunk fix via pull request
+        id: seed
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH="scenario/hotfix-api-sub-$(date +%s)-$RANDOM"
+          git fetch origin main --quiet
+          git checkout -B "$BRANCH" origin/main
+          mkdir -p "$API_PATH"
+          echo "hotfix-sub=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" > "$API_PATH/hotfix.txt"
+          git add "$API_PATH/hotfix.txt"
+          git commit --no-gpg-sign -s -m "fix: api trunk fix for staging hotfix"
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "fix: api trunk fix for staging hotfix" \
+            --body "Automated scenario run; trunk fix elevated to api staging via the hotfix chain."
+          gh pr merge "$BRANCH" --rebase --delete-branch
+          git fetch origin main --quiet
+          FIX_SHA=$(git rev-parse origin/main)
+          echo "fix_sha=$FIX_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the seed orchestrate-api run to settle
+        id: seed_orch
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          FIX_SHA: ${{ steps.seed.outputs.fix_sha }}
+        run: |
+          set -euo pipefail
+          RUN_ID=""
+          for _ in $(seq 1 10); do
+            RUN_ID=$(gh run list --workflow=orchestrate-api.yaml --branch=main \
+              --json=databaseId,headSha \
+              --jq=".[] | select(.headSha==\"$FIX_SHA\") | .databaseId" 2>/dev/null | head -n1)
+            [ -n "$RUN_ID" ] && break
+            sleep 60
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::seed fix did not fire orchestrate-api for $FIX_SHA"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Register seed orchestrate-api run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.seed_orch.outputs.run_id }}
+          expected-conclusion: success
+          reason: hotfix-subenv-seed-orchestrate-api
+          upload: 'true'
+
+      - name: Dispatch api staging hotfix
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          FIX_SHA: ${{ steps.seed.outputs.fix_sha }}
+        run: |
+          set -euo pipefail
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run cascade-hotfix-api.yaml \
+            -f commit="$FIX_SHA" -f target_env=staging -f dry_run=false
+          echo "ts=$TS" >> "$GITHUB_OUTPUT"
+
+      - name: Await the hotfix plan/apply run
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          SINCE: ${{ steps.dispatch.outputs.ts }}
+        run: |
+          set -euo pipefail
+          RUN_ID=""
+          for _ in $(seq 1 15); do
+            RUN_ID=$(gh run list --workflow=cascade-hotfix-api.yaml --event=workflow_dispatch \
+              --created=">=$SINCE" --limit=1 \
+              --json=databaseId --jq='.[0].databaseId // empty' 2>/dev/null || echo "")
+            [ -n "$RUN_ID" ] && break
+            sleep 30
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::api staging hotfix dispatch run did not appear"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Register api staging hotfix plan/apply run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.plan.outputs.run_id }}
+          expected-conclusion: success
+          reason: hotfix-subenv-plan-apply-api
+          upload: 'true'
+
+      - name: Resolve and register the env/api/staging finalize run
+        id: finalize
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          SINCE: ${{ steps.dispatch.outputs.ts }}
+        run: |
+          set -euo pipefail
+          PR_HEAD=$(gh pr list --base env/api/staging --state all --label cascade-hotfix \
+            --json number,headRefName --jq 'sort_by(.number) | last | .headRefName' 2>/dev/null || echo "")
+          if [ -z "$PR_HEAD" ]; then
+            echo "::error::no merged cascade-hotfix PR into env/api/staging"
+            exit 1
+          fi
+          RUN_ID=""
+          for _ in $(seq 1 40); do
+            RUN_ID=$(gh run list --workflow=cascade-hotfix-api.yaml --branch "$PR_HEAD" --event pull_request \
+              --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$SINCE\")] | sort_by(.createdAt) | .[0].databaseId // empty" 2>/dev/null || echo "")
+            [ -n "$RUN_ID" ] && break
+            sleep 30
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::no pull_request finalize run for env/api/staging head $PR_HEAD"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Register env/api/staging finalize run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.finalize.outputs.run_id }}
+          expected-conclusion: success
+          reason: hotfix-subenv-finalize-env-api-staging
+          upload: 'true'
+
+      - name: Assert api staging diverged and web is wholly untouched
+        env:
+          FIX_SHA: ${{ steps.seed.outputs.fix_sha }}
+          WEB_DEV: ${{ steps.baseline.outputs.web_dev }}
+          WEB_STAGING: ${{ steps.baseline.outputs.web_staging }}
+          WEB_PROD: ${{ steps.baseline.outputs.web_prod }}
+          WEB_PROD_SHA: ${{ steps.baseline.outputs.web_prod_sha }}
+        run: |
+          set -euo pipefail
+          REF=""
+          for _ in 1 2 3 4 5; do
+            git fetch origin main --quiet
+            git reset --hard origin/main
+            REF=$(yq eval '.ci.state.components.api.staging.ref // ""' .github/manifest.yaml)
+            [ "$REF" = "env/api/staging" ] && break
+            sleep 60
+          done
+          if [ "$REF" != "env/api/staging" ]; then
+            echo "::error::api staging did not diverge onto its own integration branch: got '$REF'"
+            exit 1
+          fi
+          VER=$(yq eval '.ci.state.components.api.staging.version // ""' .github/manifest.yaml)
+          if ! echo "$VER" | grep -qE '^api-[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+\.hotfix\.[0-9]+$'; then
+            echo "::error::api staging version is not a component hotfix rc: '$VER'"
+            exit 1
+          fi
+          if ! yq eval '.ci.state.components.api.staging.patches[]' .github/manifest.yaml | grep -qF "$FIX_SHA"; then
+            echo "::error::api staging patches do not carry the seeded fix $FIX_SHA"
+            exit 1
+          fi
+          # SIBLING ISOLATION: every web leaf holds its pre-hotfix value.
+          for pair in "dev:$WEB_DEV" "staging:$WEB_STAGING" "prod:$WEB_PROD"; do
+            e="${pair%%:*}"; want="${pair#*:}"
+            got=$(yq eval ".ci.state.components.web.${e}.version // \"~\"" .github/manifest.yaml)
+            if [ "$got" != "$want" ]; then
+              echo "::error::web $e version moved during an api hotfix: before='$want' after='$got'"
+              exit 1
+            fi
+          done
+          got_prod_sha=$(yq eval '.ci.state.components.web.prod.sha // "~"' .github/manifest.yaml)
+          if [ "$got_prod_sha" != "$WEB_PROD_SHA" ]; then
+            echo "::error::web prod sha moved during an api hotfix: before='$WEB_PROD_SHA' after='$got_prod_sha'"
+            exit 1
+          fi
+          # web must not be diverged and must own no integration branch.
+          WEB_REF=$(yq eval '.ci.state.components.web.staging.ref // ""' .github/manifest.yaml)
+          if [ -n "$WEB_REF" ]; then
+            echo "::error::web staging carries a divergence ref after an api-only hotfix: '$WEB_REF'"
+            exit 1
+          fi
+          git fetch origin '+refs/heads/env/*:refs/remotes/origin/env/*' --quiet 2>/dev/null || true
+          if git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/env/web/*' | grep -q .; then
+            echo "::error::an env/web/* integration branch exists after an api-only hotfix"
+            exit 1
+          fi
+          echo "OK: api staging diverged ($VER on $REF); web subtree, ref and branch namespace untouched"
+
+      # Divergence guard: with api staging carrying non-trunk patches, a
+      # promote-api staging-to-prod must be REFUSED by the guard. web is not
+      # diverged, so this proves the guard is per-component: it fires on api and
+      # never on web.
+      - name: Assert promote-api from diverged staging is guarded
+        id: guard
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          API_PROD_BEFORE: ${{ steps.baseline.outputs.api_prod }}
+        run: |
+          set -euo pipefail
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run promote-api.yaml -f mode=staging-to-prod --ref main
+          RUN_ID=""
+          for _ in $(seq 1 15); do
+            RUN_ID=$(gh run list --workflow=promote-api.yaml --event=workflow_dispatch \
+              --created=">=$TS" --limit=1 \
+              --json=databaseId --jq='.[0].databaseId // empty' 2>/dev/null || echo "")
+            [ -n "$RUN_ID" ] && break
+            sleep 30
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::guarded promote-api run did not appear"
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          gh run watch "$RUN_ID" --interval 60 >/dev/null 2>&1 || true
+          CONCL=$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion // "none"')
+          if [ "$CONCL" != "failure" ]; then
+            echo "::error::promote-api from diverged staging must fail via the guard; got '$CONCL'"
+            exit 1
+          fi
+          LOG=$(gh run view "$RUN_ID" --log-failed 2>/dev/null || gh run view "$RUN_ID" --log 2>/dev/null || echo "")
+          if ! printf '%s' "$LOG" | grep -qF 'cannot promote from diverged environment'; then
+            echo "::error::promote-api failed but not via the divergence guard"
+            exit 1
+          fi
+          if ! printf '%s' "$LOG" | grep -qF 'must not propagate upward'; then
+            echo "::error::guard message incomplete; expected 'must not propagate upward'"
+            exit 1
+          fi
+          git fetch origin main --quiet
+          git reset --hard origin/main
+          API_PROD_AFTER=$(yq eval '.ci.state.components.api.prod.version // "~"' .github/manifest.yaml)
+          if [ "$API_PROD_AFTER" != "$API_PROD_BEFORE" ]; then
+            echo "::error::guarded promote wrote api prod state: before='$API_PROD_BEFORE' after='$API_PROD_AFTER'"
+            exit 1
+          fi
+          echo "OK: divergence guard refused promote-api staging-to-prod; api prod unmoved"
+
+      - name: Register guarded promote-api run (expected failure)
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.guard.outputs.run_id }}
+          expected-conclusion: failure
+          reason: hotfix-subenv-divergence-guard-api
+          upload: 'true'
+
+      # Rejoin: a forward promote INTO the diverged env ends the divergence. A
+      # dev-to-staging promote rewrites api staging from a clean trunk SHA and
+      # clears its ref.
+      - name: Rejoin api staging by rolling forward
+        id: rejoin
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run promote-api.yaml -f mode=dev-to-staging --ref main
+          RUN_ID=""
+          for _ in $(seq 1 15); do
+            RUN_ID=$(gh run list --workflow=promote-api.yaml --event=workflow_dispatch \
+              --created=">=$TS" --limit=1 \
+              --json=databaseId --jq='.[0].databaseId // empty' 2>/dev/null || echo "")
+            [ -n "$RUN_ID" ] && break
+            sleep 30
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::rejoin promote-api dev-to-staging run did not appear"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          REF="pending"
+          for _ in 1 2 3 4 5; do
+            git fetch origin main --quiet
+            git reset --hard origin/main
+            REF=$(yq eval '.ci.state.components.api.staging.ref // ""' .github/manifest.yaml)
+            [ -z "$REF" ] && break
+            sleep 60
+          done
+          if [ -n "$REF" ]; then
+            echo "::error::api staging divergence did not clear on rejoin: ref still '$REF'"
+            exit 1
+          fi
+          echo "OK: roll-forward rejoined api staging; ref cleared"
+
+      - name: Register rejoin promote-api run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.rejoin.outputs.run_id }}
+          expected-conclusion: success
+          reason: hotfix-subenv-rejoin-api
+          upload: 'true'
+
+      - name: Hotfix sub-env snapshot
+        if: always()
+        run: |
+          {
+            echo "## api staging hotfix - sibling isolation"
+            echo ""
+            echo "api staging diverged onto env/api/staging then rejoined; web never moved."
+            echo ""
+            echo "| Component | dev | staging | prod |"
+            echo "|-----------|-----|---------|------|"
+            echo "| api | $(yq eval '.ci.state.components.api.dev.version // "~"' .github/manifest.yaml) | $(yq eval '.ci.state.components.api.staging.version // "~"' .github/manifest.yaml) | $(yq eval '.ci.state.components.api.prod.version // "~"' .github/manifest.yaml) |"
+            echo "| web | $(yq eval '.ci.state.components.web.dev.version // "~"' .github/manifest.yaml) | $(yq eval '.ci.state.components.web.staging.version // "~"' .github/manifest.yaml) | $(yq eval '.ci.state.components.web.prod.version // "~"' .github/manifest.yaml) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  hotfix-prod-api:
+    name: Hotfix api prod - prod-gate path, web prod untouched
+    runs-on: ubuntu-latest
+    needs: hotfix-subenv-api
+    steps:
+      - name: Install gh transient-retry wrapper
+        run: |
+          cat > "$RUNNER_TEMP/gh-retry.sh" <<'GHRETRY'
+          _gh_is_transient() {
+            local out="$1"
+            if printf '%s' "$out" | grep -qiE 'HTTP 5[0-9][0-9]|HTTP 429|HTTP 401|Bad credentials|was submitted too quickly|secondary rate limit'; then
+              return 0
+            fi
+            if printf '%s' "$out" | grep -qiE 'HTTP 403'; then
+              if printf '%s' "$out" | grep -qiE 'rate limit|secondary|abuse|too quickly'; then
+                return 0
+              fi
+            fi
+            return 1
+          }
+          gh() {
+            local attempt=1 max="${GH_RETRY_MAX:-5}" delay="${GH_RETRY_BASE_DELAY:-3}" out rc
+            while :; do
+              out="$(command gh "$@" 2>&1)" && rc=0 || rc=$?
+              if [ "$rc" -eq 0 ]; then
+                printf '%s\n' "$out"
+                return 0
+              fi
+              if [ "$attempt" -ge "$max" ] || ! _gh_is_transient "$out"; then
+                printf '%s\n' "$out" >&2
+                return "$rc"
+              fi
+              printf 'gh: transient error on attempt %d/%d, retrying in %ds\n%s\n' "$attempt" "$max" "$delay" "$out" >&2
+              sleep "$delay"
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+          }
+          GHRETRY
+          echo "BASH_ENV=$RUNNER_TEMP/gh-retry.sh" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Capture web prod baseline and api prod precondition
+        id: baseline
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          git reset --hard origin/main
+          API_PROD=$(yq eval '.ci.state.components.api.prod.version // ""' .github/manifest.yaml)
+          if [ -z "$API_PROD" ]; then
+            echo "::error::api prod must be published before a prod hotfix; got empty"
+            exit 1
+          fi
+          {
+            echo "web_prod=$(yq eval '.ci.state.components.web.prod.version // "~"' .github/manifest.yaml)"
+            echo "web_prod_sha=$(yq eval '.ci.state.components.web.prod.sha // "~"' .github/manifest.yaml)"
+          } >> "$GITHUB_OUTPUT"
+          echo "api prod precondition=$API_PROD"
+
+      - name: Seed an api trunk fix via pull request
+        id: seed
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH="scenario/hotfix-api-prod-$(date +%s)-$RANDOM"
+          git fetch origin main --quiet
+          git checkout -B "$BRANCH" origin/main
+          mkdir -p "$API_PATH"
+          echo "hotfix-prod=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" > "$API_PATH/hotfix.txt"
+          git add "$API_PATH/hotfix.txt"
+          git commit --no-gpg-sign -s -m "fix: api trunk fix for prod hotfix"
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "fix: api trunk fix for prod hotfix" \
+            --body "Automated scenario run; trunk fix elevated to api prod via the hotfix chain."
+          gh pr merge "$BRANCH" --rebase --delete-branch
+          git fetch origin main --quiet
+          FIX_SHA=$(git rev-parse origin/main)
+          echo "fix_sha=$FIX_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the seed orchestrate-api run to settle
+        id: seed_orch
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          FIX_SHA: ${{ steps.seed.outputs.fix_sha }}
+        run: |
+          set -euo pipefail
+          RUN_ID=""
+          for _ in $(seq 1 10); do
+            RUN_ID=$(gh run list --workflow=orchestrate-api.yaml --branch=main \
+              --json=databaseId,headSha \
+              --jq=".[] | select(.headSha==\"$FIX_SHA\") | .databaseId" 2>/dev/null | head -n1)
+            [ -n "$RUN_ID" ] && break
+            sleep 60
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::seed fix did not fire orchestrate-api for $FIX_SHA"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Register seed orchestrate-api run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.seed_orch.outputs.run_id }}
+          expected-conclusion: success
+          reason: hotfix-prod-seed-orchestrate-api
+          upload: 'true'
+
+      - name: Dispatch api prod hotfix
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          FIX_SHA: ${{ steps.seed.outputs.fix_sha }}
+        run: |
+          set -euo pipefail
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run cascade-hotfix-api.yaml \
+            -f commit="$FIX_SHA" -f target_env=prod -f dry_run=false
+          echo "ts=$TS" >> "$GITHUB_OUTPUT"
+
+      - name: Await the hotfix plan/apply run
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          SINCE: ${{ steps.dispatch.outputs.ts }}
+        run: |
+          set -euo pipefail
+          RUN_ID=""
+          for _ in $(seq 1 15); do
+            RUN_ID=$(gh run list --workflow=cascade-hotfix-api.yaml --event=workflow_dispatch \
+              --created=">=$SINCE" --limit=1 \
+              --json=databaseId --jq='.[0].databaseId // empty' 2>/dev/null || echo "")
+            [ -n "$RUN_ID" ] && break
+            sleep 30
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::api prod hotfix dispatch run did not appear"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Register api prod hotfix plan/apply run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.plan.outputs.run_id }}
+          expected-conclusion: success
+          reason: hotfix-prod-plan-apply-api
+          upload: 'true'
+
+      # A prod hotfix chains staging then prod (dev is trunk, so it is excluded),
+      # opening and finalizing one cascade-hotfix PR per env. Resolve, watch and
+      # register BOTH finalize runs so no fire-and-forget run reds reconcile.
+      - name: Resolve and register both chain finalize runs
+        id: finalize
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          SINCE: ${{ steps.dispatch.outputs.ts }}
+        run: |
+          set -euo pipefail
+          for e in staging prod; do
+            PR_HEAD=$(gh pr list --base "env/api/${e}" --state all --label cascade-hotfix \
+              --json number,headRefName --jq 'sort_by(.number) | last | .headRefName' 2>/dev/null || echo "")
+            if [ -z "$PR_HEAD" ]; then
+              echo "::error::no merged cascade-hotfix PR into env/api/${e}"
+              exit 1
+            fi
+            RUN_ID=""
+            for _ in $(seq 1 40); do
+              RUN_ID=$(gh run list --workflow=cascade-hotfix-api.yaml --branch "$PR_HEAD" --event pull_request \
+                --json databaseId,createdAt \
+                --jq "[.[] | select(.createdAt >= \"$SINCE\")] | sort_by(.createdAt) | .[0].databaseId // empty" 2>/dev/null || echo "")
+              [ -n "$RUN_ID" ] && break
+              sleep 30
+            done
+            if [ -z "$RUN_ID" ]; then
+              echo "::error::no pull_request finalize run for env/api/${e} head $PR_HEAD"
+              exit 1
+            fi
+            gh run watch "$RUN_ID" --exit-status --interval 60
+            echo "run_${e}=$RUN_ID" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Register env/api/staging chain finalize run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.finalize.outputs.run_staging }}
+          expected-conclusion: success
+          reason: hotfix-prod-finalize-env-api-staging
+          upload: 'true'
+
+      - name: Register env/api/prod chain finalize run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.finalize.outputs.run_prod }}
+          expected-conclusion: success
+          reason: hotfix-prod-finalize-env-api-prod
+          upload: 'true'
+
+      - name: Assert api prod diverged via the prod-gate and web prod untouched
+        env:
+          FIX_SHA: ${{ steps.seed.outputs.fix_sha }}
+          WEB_PROD: ${{ steps.baseline.outputs.web_prod }}
+          WEB_PROD_SHA: ${{ steps.baseline.outputs.web_prod_sha }}
+        run: |
+          set -euo pipefail
+          REF=""
+          for _ in 1 2 3 4 5; do
+            git fetch origin main --quiet
+            git reset --hard origin/main
+            REF=$(yq eval '.ci.state.components.api.prod.ref // ""' .github/manifest.yaml)
+            [ "$REF" = "env/api/prod" ] && break
+            sleep 60
+          done
+          if [ "$REF" != "env/api/prod" ]; then
+            echo "::error::api prod did not diverge onto its own integration branch: got '$REF'"
+            exit 1
+          fi
+          VER=$(yq eval '.ci.state.components.api.prod.version // ""' .github/manifest.yaml)
+          if ! echo "$VER" | grep -qE '^api-[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+\.hotfix\.[0-9]+$'; then
+            echo "::error::api prod version is not a component hotfix rc: '$VER'"
+            exit 1
+          fi
+          if ! yq eval '.ci.state.components.api.prod.patches[]' .github/manifest.yaml | grep -qF "$FIX_SHA"; then
+            echo "::error::api prod patches do not carry the seeded fix $FIX_SHA"
+            exit 1
+          fi
+          # SIBLING ISOLATION: web prod holds its pre-hotfix version and sha.
+          got=$(yq eval '.ci.state.components.web.prod.version // "~"' .github/manifest.yaml)
+          if [ "$got" != "$WEB_PROD" ]; then
+            echo "::error::web prod version moved during an api prod hotfix: before='$WEB_PROD' after='$got'"
+            exit 1
+          fi
+          got_sha=$(yq eval '.ci.state.components.web.prod.sha // "~"' .github/manifest.yaml)
+          if [ "$got_sha" != "$WEB_PROD_SHA" ]; then
+            echo "::error::web prod sha moved during an api prod hotfix: before='$WEB_PROD_SHA' after='$got_sha'"
+            exit 1
+          fi
+          WEB_REF=$(yq eval '.ci.state.components.web.prod.ref // ""' .github/manifest.yaml)
+          if [ -n "$WEB_REF" ]; then
+            echo "::error::web prod carries a divergence ref after an api-only hotfix: '$WEB_REF'"
+            exit 1
+          fi
+          echo "OK: api prod diverged ($VER on $REF); web prod untouched"
+
+      - name: Rejoin api by rolling forward to prod
+        id: rejoin
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run promote-api.yaml -f mode=dev-to-prod --ref main
+          RUN_ID=""
+          for _ in $(seq 1 15); do
+            RUN_ID=$(gh run list --workflow=promote-api.yaml --event=workflow_dispatch \
+              --created=">=$TS" --limit=1 \
+              --json=databaseId --jq='.[0].databaseId // empty' 2>/dev/null || echo "")
+            [ -n "$RUN_ID" ] && break
+            sleep 30
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::rejoin promote-api dev-to-prod run did not appear"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          # dev-to-prod also updates staging, so both chain envs rejoin.
+          REF="pending"
+          for _ in 1 2 3 4 5; do
+            git fetch origin main --quiet
+            git reset --hard origin/main
+            PREF=$(yq eval '.ci.state.components.api.prod.ref // ""' .github/manifest.yaml)
+            SREF=$(yq eval '.ci.state.components.api.staging.ref // ""' .github/manifest.yaml)
+            if [ -z "$PREF" ] && [ -z "$SREF" ]; then REF=""; break; fi
+            sleep 60
+          done
+          if [ -n "$REF" ]; then
+            echo "::error::api prod/staging divergence did not clear on rejoin"
+            exit 1
+          fi
+          echo "OK: roll-forward rejoined api prod and staging; refs cleared"
+
+      - name: Register rejoin promote-api run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.rejoin.outputs.run_id }}
+          expected-conclusion: success
+          reason: hotfix-prod-rejoin-api
+          upload: 'true'
+
+      - name: Prod hotfix snapshot
+        if: always()
+        run: |
+          {
+            echo "## api prod hotfix - prod-gate and sibling isolation"
+            echo ""
+            echo "api prod diverged onto env/api/prod then rejoined; web prod never moved."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  rollback-api:
+    name: Rollback api prod - api leaf reverts, web prod untouched
+    runs-on: ubuntu-latest
+    needs: hotfix-prod-api
+    steps:
+      - name: Install gh transient-retry wrapper
+        run: |
+          cat > "$RUNNER_TEMP/gh-retry.sh" <<'GHRETRY'
+          _gh_is_transient() {
+            local out="$1"
+            if printf '%s' "$out" | grep -qiE 'HTTP 5[0-9][0-9]|HTTP 429|HTTP 401|Bad credentials|was submitted too quickly|secondary rate limit'; then
+              return 0
+            fi
+            if printf '%s' "$out" | grep -qiE 'HTTP 403'; then
+              if printf '%s' "$out" | grep -qiE 'rate limit|secondary|abuse|too quickly'; then
+                return 0
+              fi
+            fi
+            return 1
+          }
+          gh() {
+            local attempt=1 max="${GH_RETRY_MAX:-5}" delay="${GH_RETRY_BASE_DELAY:-3}" out rc
+            while :; do
+              out="$(command gh "$@" 2>&1)" && rc=0 || rc=$?
+              if [ "$rc" -eq 0 ]; then
+                printf '%s\n' "$out"
+                return 0
+              fi
+              if [ "$attempt" -ge "$max" ] || ! _gh_is_transient "$out"; then
+                printf '%s\n' "$out" >&2
+                return "$rc"
+              fi
+              printf 'gh: transient error on attempt %d/%d, retrying in %ds\n%s\n' "$attempt" "$max" "$delay" "$out" >&2
+              sleep "$delay"
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+          }
+          GHRETRY
+          echo "BASH_ENV=$RUNNER_TEMP/gh-retry.sh" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Capture api prod current and a prior target, plus web baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          git reset --hard origin/main
+          CUR_VER=$(yq eval '.ci.state.components.api.prod.version // ""' .github/manifest.yaml)
+          CUR_SHA=$(yq eval '.ci.state.components.api.prod.sha // ""' .github/manifest.yaml)
+          if [ -z "$CUR_VER" ] || [ -z "$CUR_SHA" ]; then
+            echo "::error::api prod must be published before rollback"
+            exit 1
+          fi
+          # Resolve a prior published api- release to roll back to, ignoring the
+          # current version. This keeps the assertion independent of the ring's
+          # internal ordering.
+          PRIOR_VER=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 \
+            --json tagName --jq "[.[] | select(.tagName | startswith(\"api-\")) | select(.tagName != \"$CUR_VER\")] | .[0].tagName // empty" 2>/dev/null || echo "")
+          if [ -z "$PRIOR_VER" ]; then
+            echo "::error::no prior api- release to roll back to; ring has only $CUR_VER"
+            exit 1
+          fi
+          {
+            echo "cur_ver=$CUR_VER"
+            echo "cur_sha=$CUR_SHA"
+            echo "prior_ver=$PRIOR_VER"
+            echo "web_prod=$(yq eval '.ci.state.components.web.prod.version // "~"' .github/manifest.yaml)"
+            echo "web_prod_sha=$(yq eval '.ci.state.components.web.prod.sha // "~"' .github/manifest.yaml)"
+          } >> "$GITHUB_OUTPUT"
+          echo "rollback target: $CUR_VER -> $PRIOR_VER"
+
+      - name: Dispatch api prod rollback
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          PRIOR_VER: ${{ steps.baseline.outputs.prior_ver }}
+        run: |
+          set -euo pipefail
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run cascade-rollback-api.yaml \
+            -f environment=prod -f target="$PRIOR_VER" -f dry_run=false
+          RUN_ID=""
+          for _ in $(seq 1 15); do
+            RUN_ID=$(gh run list --workflow=cascade-rollback-api.yaml --event=workflow_dispatch \
+              --created=">=$TS" --limit=1 \
+              --json=databaseId --jq='.[0].databaseId // empty' 2>/dev/null || echo "")
+            [ -n "$RUN_ID" ] && break
+            sleep 30
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::api rollback dispatch run did not appear"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Register api rollback run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.dispatch.outputs.run_id }}
+          expected-conclusion: success
+          reason: rollback-api-prod
+          upload: 'true'
+
+      - name: Assert api prod rolled back and web prod untouched
+        env:
+          CUR_VER: ${{ steps.baseline.outputs.cur_ver }}
+          CUR_SHA: ${{ steps.baseline.outputs.cur_sha }}
+          PRIOR_VER: ${{ steps.baseline.outputs.prior_ver }}
+          WEB_PROD: ${{ steps.baseline.outputs.web_prod }}
+          WEB_PROD_SHA: ${{ steps.baseline.outputs.web_prod_sha }}
+        run: |
+          set -euo pipefail
+          # Rollback rewrites an env that already had a version, so poll until the
+          # api prod sha actually changes off its pre-rollback value.
+          NEW_SHA="$CUR_SHA"
+          for _ in 1 2 3 4 5; do
+            git fetch origin main --quiet
+            git reset --hard origin/main
+            NEW_SHA=$(yq eval '.ci.state.components.api.prod.sha // ""' .github/manifest.yaml)
+            [ -n "$NEW_SHA" ] && [ "$NEW_SHA" != "$CUR_SHA" ] && break
+            sleep 60
+          done
+          if [ "$NEW_SHA" = "$CUR_SHA" ] || [ -z "$NEW_SHA" ]; then
+            echo "::error::api prod sha did not change after rollback (still '$CUR_SHA')"
+            exit 1
+          fi
+          NEW_VER=$(yq eval '.ci.state.components.api.prod.version // ""' .github/manifest.yaml)
+          if [ "$NEW_VER" != "$PRIOR_VER" ]; then
+            echo "::error::api prod did not roll back to the prior version: want '$PRIOR_VER' got '$NEW_VER'"
+            exit 1
+          fi
+          REF=$(yq eval '.ci.state.components.api.prod.ref // ""' .github/manifest.yaml)
+          if [ "$REF" != "rollback/api/prod" ]; then
+            echo "::error::api prod not marked diverged by rollback: ref='$REF'"
+            exit 1
+          fi
+          # SIBLING ISOLATION: web prod holds its version and sha across the api rollback.
+          got=$(yq eval '.ci.state.components.web.prod.version // "~"' .github/manifest.yaml)
+          if [ "$got" != "$WEB_PROD" ]; then
+            echo "::error::web prod version moved during an api rollback: before='$WEB_PROD' after='$got'"
+            exit 1
+          fi
+          got_sha=$(yq eval '.ci.state.components.web.prod.sha // "~"' .github/manifest.yaml)
+          if [ "$got_sha" != "$WEB_PROD_SHA" ]; then
+            echo "::error::web prod sha moved during an api rollback: before='$WEB_PROD_SHA' after='$got_sha'"
+            exit 1
+          fi
+          WEB_REF=$(yq eval '.ci.state.components.web.prod.ref // ""' .github/manifest.yaml)
+          if [ -n "$WEB_REF" ]; then
+            echo "::error::web prod carries a divergence ref after an api rollback: '$WEB_REF'"
+            exit 1
+          fi
+          echo "OK: api prod rolled $CUR_VER -> $NEW_VER (ref=$REF); web prod untouched"
+
+      - name: Rejoin api prod by rolling forward
+        id: rejoin
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run promote-api.yaml -f mode=dev-to-prod --ref main
+          RUN_ID=""
+          for _ in $(seq 1 15); do
+            RUN_ID=$(gh run list --workflow=promote-api.yaml --event=workflow_dispatch \
+              --created=">=$TS" --limit=1 \
+              --json=databaseId --jq='.[0].databaseId // empty' 2>/dev/null || echo "")
+            [ -n "$RUN_ID" ] && break
+            sleep 30
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::rejoin promote-api dev-to-prod run did not appear"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          REF="pending"
+          for _ in 1 2 3 4 5; do
+            git fetch origin main --quiet
+            git reset --hard origin/main
+            REF=$(yq eval '.ci.state.components.api.prod.ref // ""' .github/manifest.yaml)
+            [ -z "$REF" ] && break
+            sleep 60
+          done
+          if [ -n "$REF" ]; then
+            echo "::error::api prod rollback divergence did not clear on rejoin: ref still '$REF'"
+            exit 1
+          fi
+          echo "OK: roll-forward rejoined api prod; rollback ref cleared"
+
+      - name: Register rejoin promote-api run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.rejoin.outputs.run_id }}
+          expected-conclusion: success
+          reason: rollback-api-rejoin
+          upload: 'true'
+
+      - name: Rollback snapshot
+        if: always()
+        run: |
+          {
+            echo "## api rollback - sibling isolation"
+            echo ""
+            echo "api prod rolled back onto rollback/api/prod then rejoined; web prod never moved."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  rc-reap-isolation-api:
+    name: RC-reap isolation - publishing api never reaps web rc tags
+    runs-on: ubuntu-latest
+    needs: rollback-api
+    steps:
+      - name: Install gh transient-retry wrapper
+        run: |
+          cat > "$RUNNER_TEMP/gh-retry.sh" <<'GHRETRY'
+          _gh_is_transient() {
+            local out="$1"
+            if printf '%s' "$out" | grep -qiE 'HTTP 5[0-9][0-9]|HTTP 429|HTTP 401|Bad credentials|was submitted too quickly|secondary rate limit'; then
+              return 0
+            fi
+            if printf '%s' "$out" | grep -qiE 'HTTP 403'; then
+              if printf '%s' "$out" | grep -qiE 'rate limit|secondary|abuse|too quickly'; then
+                return 0
+              fi
+            fi
+            return 1
+          }
+          gh() {
+            local attempt=1 max="${GH_RETRY_MAX:-5}" delay="${GH_RETRY_BASE_DELAY:-3}" out rc
+            while :; do
+              out="$(command gh "$@" 2>&1)" && rc=0 || rc=$?
+              if [ "$rc" -eq 0 ]; then
+                printf '%s\n' "$out"
+                return 0
+              fi
+              if [ "$attempt" -ge "$max" ] || ! _gh_is_transient "$out"; then
+                printf '%s\n' "$out" >&2
+                return "$rc"
+              fi
+              printf 'gh: transient error on attempt %d/%d, retrying in %ds\n%s\n' "$attempt" "$max" "$delay" "$out" >&2
+              sleep "$delay"
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+          }
+          GHRETRY
+          echo "BASH_ENV=$RUNNER_TEMP/gh-retry.sh" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # Seed a fresh web dev rc so the web tag namespace holds an unpublished rc
+      # that MUST survive the api publish below. cascade's rc-tag reaper is scoped
+      # to a component's own tag_prefix, so publishing api can only reap api-*-rc.*.
+      - name: Seed a fresh web dev rc
+        id: seed_web
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH="scenario/reap-web-$(date +%s)-$RANDOM"
+          git fetch origin main --quiet
+          git checkout -B "$BRANCH" origin/main
+          mkdir -p "$WEB_PATH"
+          echo "reap-web=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" > "$WEB_PATH/version.txt"
+          git add "$WEB_PATH/version.txt"
+          git commit --no-gpg-sign -s -m "feat: web change to seed a surviving web rc"
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "feat: web change to seed a surviving web rc" \
+            --body "Automated scenario run; seeds a web dev rc that must outlive an api publish."
+          gh pr merge "$BRANCH" --rebase --delete-branch
+          git fetch origin main --quiet
+          SHA=$(git rev-parse origin/main)
+          RUN_ID=""
+          for _ in $(seq 1 10); do
+            RUN_ID=$(gh run list --workflow=orchestrate-web.yaml --branch=main \
+              --json=databaseId,headSha \
+              --jq=".[] | select(.headSha==\"$SHA\") | .databaseId" 2>/dev/null | head -n1)
+            [ -n "$RUN_ID" ] && break
+            sleep 60
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::web seed did not fire orchestrate-web for $SHA"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Register web rc-seed orchestrate run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.seed_web.outputs.run_id }}
+          expected-conclusion: success
+          reason: rc-reap-seed-orchestrate-web
+          upload: 'true'
+
+      - name: Seed a fresh api dev rc
+        id: seed_api
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH="scenario/reap-api-$(date +%s)-$RANDOM"
+          git fetch origin main --quiet
+          git checkout -B "$BRANCH" origin/main
+          mkdir -p "$API_PATH"
+          echo "reap-api=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" > "$API_PATH/version.txt"
+          git add "$API_PATH/version.txt"
+          git commit --no-gpg-sign -s -m "feat: api change to seed an api rc for reaping"
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "feat: api change to seed an api rc for reaping" \
+            --body "Automated scenario run; seeds an api dev rc that the api publish reaps."
+          gh pr merge "$BRANCH" --rebase --delete-branch
+          git fetch origin main --quiet
+          SHA=$(git rev-parse origin/main)
+          RUN_ID=""
+          for _ in $(seq 1 10); do
+            RUN_ID=$(gh run list --workflow=orchestrate-api.yaml --branch=main \
+              --json=databaseId,headSha \
+              --jq=".[] | select(.headSha==\"$SHA\") | .databaseId" 2>/dev/null | head -n1)
+            [ -n "$RUN_ID" ] && break
+            sleep 60
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::api seed did not fire orchestrate-api for $SHA"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Register api rc-seed orchestrate run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.seed_api.outputs.run_id }}
+          expected-conclusion: success
+          reason: rc-reap-seed-orchestrate-api
+          upload: 'true'
+
+      - name: Capture both rc namespaces before the api publish
+        id: before
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags --quiet
+          API_RC=$(git tag -l 'api-*-rc.*' | wc -l | tr -d ' ')
+          WEB_RC=$(git tag -l 'web-*-rc.*' | wc -l | tr -d ' ')
+          if [ "$API_RC" -eq 0 ]; then
+            echo "::error::no api rc tags to reap before the publish"
+            exit 1
+          fi
+          if [ "$WEB_RC" -eq 0 ]; then
+            echo "::error::no web rc tags to protect before the publish"
+            exit 1
+          fi
+          echo "web_rc=$WEB_RC" >> "$GITHUB_OUTPUT"
+          echo "before publish: api rc=$API_RC web rc=$WEB_RC"
+
+      - name: Publish api to prod (triggers the component-scoped rc reaper)
+        id: publish
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run promote-api.yaml -f mode=dev-to-prod --ref main
+          RUN_ID=""
+          for _ in $(seq 1 15); do
+            RUN_ID=$(gh run list --workflow=promote-api.yaml --event=workflow_dispatch \
+              --created=">=$TS" --limit=1 \
+              --json=databaseId --jq='.[0].databaseId // empty' 2>/dev/null || echo "")
+            [ -n "$RUN_ID" ] && break
+            sleep 30
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::api publish dispatch run did not appear"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Register api publish run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.publish.outputs.run_id }}
+          expected-conclusion: success
+          reason: rc-reap-publish-api
+          upload: 'true'
+
+      - name: Assert api rc reaped and web rc namespace survived
+        env:
+          WEB_RC_BEFORE: ${{ steps.before.outputs.web_rc }}
+        run: |
+          set -euo pipefail
+          # The publish deletes rc release objects and their tags; refresh the
+          # local tag view against the remote (prune stale, fetch current).
+          for _ in 1 2 3 4 5; do
+            git fetch origin --tags --prune --force --quiet
+            API_RC=$(git ls-remote --tags origin 'api-*-rc.*' | wc -l | tr -d ' ')
+            [ "$API_RC" -eq 0 ] && break
+            sleep 30
+          done
+          if [ "$API_RC" -ne 0 ]; then
+            echo "::error::api rc tags were not reaped by the api publish: $API_RC remain"
+            exit 1
+          fi
+          WEB_RC_AFTER=$(git ls-remote --tags origin 'web-*-rc.*' | wc -l | tr -d ' ')
+          if [ "$WEB_RC_AFTER" -lt "$WEB_RC_BEFORE" ]; then
+            echo "::error::an api publish reaped web rc tags: before=$WEB_RC_BEFORE after=$WEB_RC_AFTER"
+            exit 1
+          fi
+          if [ "$WEB_RC_AFTER" -eq 0 ]; then
+            echo "::error::web rc namespace is empty after an api publish; sibling isolation broken"
+            exit 1
+          fi
+          echo "OK: api publish reaped api-*-rc.* to 0; web-*-rc.* survived ($WEB_RC_AFTER present)"
+
+      - name: RC-reap snapshot
+        if: always()
+        run: |
+          {
+            echo "## RC-reap isolation"
+            echo ""
+            echo "Publishing api reaped only api-*-rc.* tags; web-*-rc.* were left intact,"
+            echo "proving the component-scoped reaper never crosses a sibling's tag namespace."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   reconcile:
     name: Reconcile scenario-window runs
-    needs: [reset, advance-api, advance-web, wave]
+    needs: [reset, advance-api, advance-web, wave, hotfix-subenv-api, hotfix-prod-api, rollback-api, rc-reap-isolation-api]
     if: always()
     uses: stablekernel/cascade/.github/workflows/fleet-reconcile.yaml@main
     permissions:
