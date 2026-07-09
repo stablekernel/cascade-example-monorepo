@@ -65,9 +65,9 @@ ci:
           committed_by: joshua-temple
       web:
         dev:
-          sha: af2f12ad598bd502d6fdbaa9bcee9bab085f9b2f
-          version: web-0.1.0-rc.0
-          committed_at: "2026-07-09T20:32:39Z"
+          sha: b6deb985ecc880a08c10ac9ed175fc09c8a96a5a
+          version: web-0.2.0-rc.0
+          committed_at: "2026-07-09T20:36:24Z"
           committed_by: joshua-temple
         staging:
           sha: af2f12ad598bd502d6fdbaa9bcee9bab085f9b2f
