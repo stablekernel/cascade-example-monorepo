@@ -68,10 +68,19 @@ ci:
                     committed_at: "2026-07-10T21:46:12Z"
                     committed_by: joshua-temple
                 prod:
-                    sha: 83480c886643d49bacc7c5eab3f43dddf158da2c
-                    version: api-0.1.0
-                    committed_at: "2026-07-10T21:46:12Z"
+                    sha: a978741aa0dd5011860c850423ccca509dcc6525
+                    version: api-0.1.1
+                    committed_at: "2026-07-10T22:00:06Z"
                     committed_by: joshua-temple
+                    ref: env/api/prod
+                    base_sha: 83480c886643d49bacc7c5eab3f43dddf158da2c
+                    patches:
+                        - 474c4781831280f60cd2c7c0659d12eee61866a5
+                    previous:
+                        - sha: 83480c886643d49bacc7c5eab3f43dddf158da2c
+                          version: api-0.1.0
+                          committed_at: "2026-07-10T21:46:12Z"
+                          committed_by: joshua-temple
             web:
                 dev:
                     sha: 9b9235fcb304a5972519d2ddcdc0867823ef4427
