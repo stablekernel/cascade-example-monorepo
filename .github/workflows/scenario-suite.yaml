@@ -1417,6 +1417,7 @@ jobs:
             exit 1
           fi
           {
+            echo "api_prod_before=$API_PROD"
             echo "web_prod=$(yq eval '.ci.state.components.web.prod.version // "~"' .github/manifest.yaml)"
             echo "web_prod_sha=$(yq eval '.ci.state.components.web.prod.sha // "~"' .github/manifest.yaml)"
           } >> "$GITHUB_OUTPUT"
@@ -1608,6 +1609,7 @@ jobs:
       - name: Assert api prod diverged via the prod-gate and web prod untouched
         env:
           FIX_SHA: ${{ steps.seed.outputs.fix_sha }}
+          API_PROD_BEFORE: ${{ steps.baseline.outputs.api_prod_before }}
           WEB_PROD: ${{ steps.baseline.outputs.web_prod }}
           WEB_PROD_SHA: ${{ steps.baseline.outputs.web_prod_sha }}
         run: |
@@ -1634,8 +1636,20 @@ jobs:
             exit 1
           fi
           VER=$(yq eval '.ci.state.components.api.prod.version // ""' .github/manifest.yaml)
-          if ! echo "$VER" | grep -qE '^api-[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+\.hotfix\.[0-9]+$'; then
-            echo "::error::api prod version is not a component hotfix rc: '$VER'"
+          # PROD LEG (released-hotfix form): the prod leg hotfixes api prod off a
+          # PUBLISHED version (no rc segment), so cascade allocates the next free
+          # patch bump (api-0.1.0 -> api-0.1.1, api-0.1.2, ... reconciled against
+          # existing tags), NOT the rc-nested .hotfix.N shape the staging leg
+          # produces. See cascade internal/hotfix/finalize.go allocateVersion: an
+          # rc base gets a nested .hotfix.M segment, a published base gets the next
+          # free patch bump. So the prod version is a plain published api- version
+          # (no rc, no hotfix segment) strictly above the pre-hotfix prod version.
+          if ! echo "$VER" | grep -qE '^api-[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::api prod version is not a released-hotfix patch bump: '$VER'"
+            exit 1
+          fi
+          if [ "$VER" = "$API_PROD_BEFORE" ]; then
+            echo "::error::api prod version did not bump on the prod hotfix: still '$VER'"
             exit 1
           fi
           SVER=$(yq eval '.ci.state.components.api.staging.version // ""' .github/manifest.yaml)
