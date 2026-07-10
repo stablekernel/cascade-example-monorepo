@@ -40,50 +40,7 @@ ci:
             workflow: .github/workflows/deploy-web.yaml
             triggers:
               - apps/web/**
-  state:
-    components:
-      api:
-        dev:
-          sha: 151d7bc1b1706eba042725c154e6058fcf5d9edd
-          version: api-0.1.0-rc.0
-          committed_at: "2026-07-10T07:27:37Z"
-          committed_by: joshua-temple
-        staging:
-          sha: 151d7bc1b1706eba042725c154e6058fcf5d9edd
-          version: api-0.1.0-rc.0
-          committed_at: "2026-07-10T07:28:29Z"
-          committed_by: joshua-temple
-        release:
-          sha: 151d7bc1b1706eba042725c154e6058fcf5d9edd
-          version: api-0.1.0
-          committed_at: "2026-07-10T07:29:34Z"
-          committed_by: joshua-temple
-        prod:
-          sha: 151d7bc1b1706eba042725c154e6058fcf5d9edd
-          version: api-0.1.0
-          committed_at: "2026-07-10T07:29:34Z"
-          committed_by: joshua-temple
-      web:
-        dev:
-          sha: fb91cd525f172dd2ca3548b28f8eae6fd865cdf4
-          version: web-0.2.0-rc.0
-          committed_at: "2026-07-10T07:34:26Z"
-          committed_by: joshua-temple
-        staging:
-          sha: 89c2e2eaf67a8b5b491b2be3511ebe152ad39142
-          version: web-0.1.0-rc.0
-          committed_at: "2026-07-10T07:31:53Z"
-          committed_by: joshua-temple
-        release:
-          sha: 89c2e2eaf67a8b5b491b2be3511ebe152ad39142
-          version: web-0.1.0
-          committed_at: "2026-07-10T07:33:13Z"
-          committed_by: joshua-temple
-        prod:
-          sha: 89c2e2eaf67a8b5b491b2be3511ebe152ad39142
-          version: web-0.1.0
-          committed_at: "2026-07-10T07:33:13Z"
-          committed_by: joshua-temple
+  state: {}
   latest_release:
     components:
       api:
