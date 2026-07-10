@@ -53,22 +53,32 @@ ci:
                     version: api-0.1.0-rc.0
                     committed_at: "2026-07-10T10:37:16Z"
                     committed_by: joshua-temple
+                release:
+                    sha: 74e21bfb9767670c254533146c2ae543aecd0ef8
+                    version: api-0.1.0
+                    committed_at: "2026-07-10T10:38:22Z"
+                    committed_by: joshua-temple
+                prod:
+                    sha: 74e21bfb9767670c254533146c2ae543aecd0ef8
+                    version: api-0.1.0
+                    committed_at: "2026-07-10T10:38:22Z"
+                    committed_by: joshua-temple
     latest_release:
         components:
             api:
                 version: api-0.1.0
-                sha: 74ca8e851e85c538b8468fc94e0700944917fb6c
-                released_on: "2026-07-10T10:28:30Z"
+                sha: 74e21bfb9767670c254533146c2ae543aecd0ef8
+                released_on: "2026-07-10T10:38:22Z"
                 released_by: joshua-temple
                 components:
                     api:
                         version: api-0.1.0
-                        sha: 151d7bc1b1706eba042725c154e6058fcf5d9edd
-                        released_on: "2026-07-10T07:29:34Z"
+                        sha: 74ca8e851e85c538b8468fc94e0700944917fb6c
+                        released_on: "2026-07-10T10:28:30Z"
                     web:
                         version: web-0.1.0
-                        sha: 89c2e2eaf67a8b5b491b2be3511ebe152ad39142
-                        released_on: "2026-07-10T07:33:13Z"
+                        sha: b0b541cb9b557f99b6df5c2b87b21aed288b726e
+                        released_on: "2026-07-10T10:32:05Z"
             web:
                 version: web-0.1.0
                 sha: b0b541cb9b557f99b6df5c2b87b21aed288b726e
