@@ -161,7 +161,7 @@ jobs:
           # no open PR (rollback pushes its branch directly and never opens
           # one). Sweep those directly off the remote branch list.
           git ls-remote --heads origin | awk '{print $2}' | sed 's#^refs/heads/##' \
-            | grep -E '^(hotfix|rollback)/' \
+            | { grep -E '^(hotfix|rollback)/' || true; } \
             | while read -r ref; do
                 echo "deleting dangling branch $ref"
                 git push origin --delete "$ref" 2>/dev/null || true
