@@ -134,6 +134,40 @@ jobs:
           git fetch --tags --quiet || true
           for t in $(git tag -l 'api-*' 'web-*' 'v*'); do git push origin --delete "$t" 2>/dev/null || true; done
 
+      # A prior cycle can leave an open PR labeled cascade-hotfix or
+      # cascade-hotfix-conflict targeting env/<component>/<env>, with a head
+      # branch under hotfix/<component>/<env>/*. That PR is correct cascade
+      # output, and a later hotfix-prod or hotfix-subenv job's preflight guard
+      # will refuse to run while it is open ("a hotfix PR already targets
+      # env/<c>/<env>"). Reap that residue here so a stray PR from one run
+      # cannot block the next. Only hotfix/* and rollback/* refs are touched;
+      # env/*, main and tags of record are never in scope.
+      - name: Reap stale hotfix/rollback residue
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          for label in cascade-hotfix cascade-hotfix-conflict; do
+            gh pr list --repo "$GITHUB_REPOSITORY" --state open --label "$label" \
+              --json number,headRefName --jq '.[] | [.number, .headRefName] | @tsv' \
+              | while IFS=$'\t' read -r number head; do
+                  echo "closing stale $label PR #$number (head $head)"
+                  gh pr close "$number" --repo "$GITHUB_REPOSITORY" --delete-branch \
+                    --comment "Closed by the scenario-suite reset job: leftover from an earlier run." || true
+                done
+          done
+
+          # Cancelled cycles can also leave a hotfix/* or rollback/* branch with
+          # no open PR (rollback pushes its branch directly and never opens
+          # one). Sweep those directly off the remote branch list.
+          git ls-remote --heads origin | awk '{print $2}' | sed 's#^refs/heads/##' \
+            | grep -E '^(hotfix|rollback)/' \
+            | while read -r ref; do
+                echo "deleting dangling branch $ref"
+                git push origin --delete "$ref" 2>/dev/null || true
+              done
+          echo "hotfix/rollback residue reaped"
+
       - name: Verify reset
         run: |
           state="$(yq eval '.ci.state' .github/manifest.yaml)"
