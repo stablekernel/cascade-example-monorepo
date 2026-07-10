@@ -1432,8 +1432,17 @@ jobs:
           git fetch origin main --quiet
           git checkout -B "$BRANCH" origin/main
           mkdir -p "$API_PATH"
-          echo "hotfix-prod=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" > "$API_PATH/hotfix.txt"
-          git add "$API_PATH/hotfix.txt"
+          # Additive, uniquely named fix file. It exists on neither env/api/staging
+          # nor env/api/prod, so each cherry-pick in the two-leg prod-gate chain is a
+          # pure add that applies cleanly on BOTH legs. A fixed filename (or an
+          # in-place edit) collides on prod: prod trails staging by several rc
+          # versions and never carries staging's line, so the single-line
+          # modify/modify produces a conflict that halts the chain and opens a
+          # cascade-hotfix-conflict PR that never finalizes. The 4env suite's clean
+          # multi-env hotfix uses the same per-run file naming.
+          FIX_FILE="$API_PATH/hotfix-prod-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          echo "api prod hotfix $(date -u +'%Y-%m-%dT%H:%M:%SZ')" > "$FIX_FILE"
+          git add "$FIX_FILE"
           git commit --no-gpg-sign -s -m "fix: api trunk fix for prod hotfix"
           git push origin "$BRANCH"
           gh pr create --base main --head "$BRANCH" \
@@ -1516,16 +1525,16 @@ jobs:
           reason: hotfix-prod-plan-apply-api
           upload: 'true'
 
-      # A prod-gate hotfix opens exactly ONE cascade-hotfix PR, into
-      # env/api/staging (the gate env below prod); prod itself diverges directly
-      # onto env/api/prod with no PR of its own, so there is never a cascade-hotfix
-      # PR into env/api/prod to finalize. Resolve, watch and register the single
-      # staging finalize run here. prod's divergence is recorded by the
-      # already-registered plan/apply run, and prod is rejoined below by the
-      # roll-forward promote, which is registered too, so every in-window run is
-      # accounted for by reconcile.
+      # A prod-gate hotfix expands to the two-leg chain [staging, prod]. The apply
+      # job cherry-picks the fix onto env/api/staging (the gate env below prod),
+      # opens a cascade-hotfix PR, auto-merges it, then repeats onto env/api/prod
+      # with its own cascade-hotfix PR. Each merged PR fires a pull_request finalize
+      # run that records that env's divergence, so there are TWO finalize runs:
+      # staging first, then prod. Resolve, watch and register both here. Every
+      # in-window run (seed orchestrate, plan/apply, both finalizes, and the rejoin
+      # promote below) is then accounted for by reconcile.
       - name: Resolve and register the env/api/staging chain finalize run
-        id: finalize
+        id: finalize_staging
         env:
           GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
           SINCE: ${{ steps.dispatch.outputs.ts }}
@@ -1555,9 +1564,45 @@ jobs:
       - name: Register env/api/staging chain finalize run
         uses: stablekernel/cascade/.github/actions/register-run@main
         with:
-          run-id: ${{ steps.finalize.outputs.run_id }}
+          run-id: ${{ steps.finalize_staging.outputs.run_id }}
           expected-conclusion: success
           reason: hotfix-prod-finalize-env-api-staging
+          upload: 'true'
+
+      - name: Resolve and register the env/api/prod chain finalize run
+        id: finalize_prod
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          SINCE: ${{ steps.dispatch.outputs.ts }}
+        run: |
+          set -euo pipefail
+          PR_HEAD=$(gh pr list --base env/api/prod --state all --label cascade-hotfix \
+            --json number,headRefName --jq 'sort_by(.number) | last | .headRefName' 2>/dev/null || echo "")
+          if [ -z "$PR_HEAD" ]; then
+            echo "::error::no merged cascade-hotfix PR into env/api/prod (the prod leg did not apply cleanly)"
+            exit 1
+          fi
+          RUN_ID=""
+          for _ in $(seq 1 40); do
+            RUN_ID=$(gh run list --workflow=cascade-hotfix-api.yaml --branch "$PR_HEAD" --event pull_request \
+              --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$SINCE\")] | sort_by(.createdAt) | .[0].databaseId // empty" 2>/dev/null || echo "")
+            [ -n "$RUN_ID" ] && break
+            sleep 30
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::no pull_request finalize run for env/api/prod head $PR_HEAD"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status --interval 60
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Register env/api/prod chain finalize run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.finalize_prod.outputs.run_id }}
+          expected-conclusion: success
+          reason: hotfix-prod-finalize-env-api-prod
           upload: 'true'
 
       - name: Assert api prod diverged via the prod-gate and web prod untouched
@@ -1567,16 +1612,25 @@ jobs:
           WEB_PROD_SHA: ${{ steps.baseline.outputs.web_prod_sha }}
         run: |
           set -euo pipefail
-          REF=""
-          for _ in 1 2 3 4 5; do
+          # The two-leg prod-gate chain lands two state commits in sequence: staging
+          # diverges first, then prod. Each leg carries cascade's mergeability poll
+          # plus a serialized finalize, so allow up to ~25 minutes for BOTH refs to
+          # settle before asserting.
+          PREF=""; SREF=""
+          for _ in $(seq 1 25); do
             git fetch origin main --quiet
             git reset --hard origin/main
-            REF=$(yq eval '.ci.state.components.api.prod.ref // ""' .github/manifest.yaml)
-            [ "$REF" = "env/api/prod" ] && break
+            PREF=$(yq eval '.ci.state.components.api.prod.ref // ""' .github/manifest.yaml)
+            SREF=$(yq eval '.ci.state.components.api.staging.ref // ""' .github/manifest.yaml)
+            [ "$PREF" = "env/api/prod" ] && [ "$SREF" = "env/api/staging" ] && break
             sleep 60
           done
-          if [ "$REF" != "env/api/prod" ]; then
-            echo "::error::api prod did not diverge onto its own integration branch: got '$REF'"
+          if [ "$SREF" != "env/api/staging" ]; then
+            echo "::error::api staging (the prod-gate env) did not diverge onto its own integration branch: got '$SREF'"
+            exit 1
+          fi
+          if [ "$PREF" != "env/api/prod" ]; then
+            echo "::error::api prod did not diverge onto its own integration branch: got '$PREF'"
             exit 1
           fi
           VER=$(yq eval '.ci.state.components.api.prod.version // ""' .github/manifest.yaml)
@@ -1584,8 +1638,17 @@ jobs:
             echo "::error::api prod version is not a component hotfix rc: '$VER'"
             exit 1
           fi
+          SVER=$(yq eval '.ci.state.components.api.staging.version // ""' .github/manifest.yaml)
+          if ! echo "$SVER" | grep -qE '^api-[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+\.hotfix\.[0-9]+$'; then
+            echo "::error::api staging version is not a component hotfix rc: '$SVER'"
+            exit 1
+          fi
           if ! yq eval '.ci.state.components.api.prod.patches[]' .github/manifest.yaml | grep -qF "$FIX_SHA"; then
             echo "::error::api prod patches do not carry the seeded fix $FIX_SHA"
+            exit 1
+          fi
+          if ! yq eval '.ci.state.components.api.staging.patches[]' .github/manifest.yaml | grep -qF "$FIX_SHA"; then
+            echo "::error::api staging patches do not carry the seeded fix $FIX_SHA"
             exit 1
           fi
           # SIBLING ISOLATION: web prod holds its pre-hotfix version and sha.
@@ -1604,7 +1667,7 @@ jobs:
             echo "::error::web prod carries a divergence ref after an api-only hotfix: '$WEB_REF'"
             exit 1
           fi
-          echo "OK: api prod diverged ($VER on $REF); web prod untouched"
+          echo "OK: api staging ($SVER on $SREF) then prod ($VER on $PREF) diverged via the prod-gate; web prod untouched"
 
       - name: Rejoin api by rolling forward to prod
         id: rejoin
