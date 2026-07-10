@@ -2143,8 +2143,15 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin main --tags --quiet
-          API_RC=$(git tag -l 'api-*-rc.*' | wc -l | tr -d ' ')
-          WEB_RC=$(git tag -l 'web-*-rc.*' | wc -l | tr -d ' ')
+          # Count PLAIN rc tags only (grammar <component>-X.Y.Z-rc.N). A publish
+          # reaps a component's superseded plain rc tags; hotfix-integration rc
+          # tags (<component>-X.Y.Z-rc.N.hotfix.M) are a separate lifecycle reaped
+          # by the hotfix-rejoin path, not by a plain publish. Scope both counts to
+          # plain rc, excluding any .hotfix. variant, so the assert measures what
+          # the publish reaper actually targets and compares api with web like for
+          # like.
+          API_RC=$(git tag -l | { grep -Ec '^api-[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' || true; })
+          WEB_RC=$(git tag -l | { grep -Ec '^web-[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' || true; })
           if [ "$API_RC" -eq 0 ]; then
             echo "::error::no api rc tags to reap before the publish"
             exit 1
@@ -2198,20 +2205,27 @@ jobs:
           # environment, so give it a bounded ~12 minutes to converge rather than
           # the previous 2.5 minutes, which could close before the single publish
           # finished reaping.
+          # Count PLAIN rc tags only (grammar <component>-X.Y.Z-rc.N), excluding
+          # hotfix-integration rc tags (<component>-X.Y.Z-rc.N.hotfix.M). Those
+          # hotfix-rc tags are a separate lifecycle: a plain publish does not reap
+          # them (they are reaped by the hotfix-rejoin path), so counting them here
+          # would leave residue an earlier hotfix job seeded and the assert would
+          # never reach 0. The regex anchors on -rc.N at end of line, so peeled
+          # (^{}) annotated-tag lines and .hotfix. variants are both excluded.
           API_RC=0
           deadline=$(( $(date +%s) + 720 ))
           while :; do
             git fetch origin --tags --prune --force --quiet
-            API_RC=$(git ls-remote --tags origin 'api-*-rc.*' | wc -l | tr -d ' ')
+            API_RC=$(git ls-remote --tags origin | { grep -Ec 'refs/tags/api-[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' || true; })
             [ "$API_RC" -eq 0 ] && break
             [ "$(date +%s)" -ge "$deadline" ] && break
             sleep 30
           done
           if [ "$API_RC" -ne 0 ]; then
-            echo "::error::api rc tags were not reaped by the api publish: $API_RC remain"
+            echo "::error::plain api rc tags were not reaped by the api publish: $API_RC remain"
             exit 1
           fi
-          WEB_RC_AFTER=$(git ls-remote --tags origin 'web-*-rc.*' | wc -l | tr -d ' ')
+          WEB_RC_AFTER=$(git ls-remote --tags origin | { grep -Ec 'refs/tags/web-[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' || true; })
           if [ "$WEB_RC_AFTER" -lt "$WEB_RC_BEFORE" ]; then
             echo "::error::an api publish reaped web rc tags: before=$WEB_RC_BEFORE after=$WEB_RC_AFTER"
             exit 1
