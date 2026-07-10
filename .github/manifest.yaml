@@ -44,9 +44,9 @@ ci:
     components:
       api:
         dev:
-          sha: fb91cd525f172dd2ca3548b28f8eae6fd865cdf4
-          version: api-0.2.0-rc.0
-          committed_at: "2026-07-10T07:34:26Z"
+          sha: 151d7bc1b1706eba042725c154e6058fcf5d9edd
+          version: api-0.1.0-rc.0
+          committed_at: "2026-07-10T07:27:37Z"
           committed_by: joshua-temple
         staging:
           sha: 151d7bc1b1706eba042725c154e6058fcf5d9edd
@@ -65,9 +65,9 @@ ci:
           committed_by: joshua-temple
       web:
         dev:
-          sha: 89c2e2eaf67a8b5b491b2be3511ebe152ad39142
-          version: web-0.1.0-rc.0
-          committed_at: "2026-07-10T07:30:55Z"
+          sha: fb91cd525f172dd2ca3548b28f8eae6fd865cdf4
+          version: web-0.2.0-rc.0
+          committed_at: "2026-07-10T07:34:26Z"
           committed_by: joshua-temple
         staging:
           sha: 89c2e2eaf67a8b5b491b2be3511ebe152ad39142
