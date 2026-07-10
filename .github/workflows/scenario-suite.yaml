@@ -2013,6 +2013,42 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      # Drain any in-flight or queued promote-api and orchestrate-api runs left by
+      # earlier and sibling jobs before we seed and measure. Every promote-api run
+      # shares the single "promote-api" concurrency group (cancel-in-progress:false),
+      # so uncoordinated dispatches publish in serialized, staggered waves. If one of
+      # those waves lands after we seed, it reaps our freshly seeded api rc between
+      # the seed and our own publish; if one lands during the assert, it reaps the
+      # remaining api rc after the poll window closes. Waiting for the group to go
+      # idle first guarantees a single deterministic publish -> reap to observe.
+      - name: Quiesce in-flight promote-api and orchestrate-api runs
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 900 ))
+          while :; do
+            p_run=$(gh run list --workflow=promote-api.yaml --status=in_progress \
+              --limit=100 --json=databaseId --jq='length' 2>/dev/null || echo 0)
+            p_queue=$(gh run list --workflow=promote-api.yaml --status=queued \
+              --limit=100 --json=databaseId --jq='length' 2>/dev/null || echo 0)
+            o_run=$(gh run list --workflow=orchestrate-api.yaml --status=in_progress \
+              --limit=100 --json=databaseId --jq='length' 2>/dev/null || echo 0)
+            o_queue=$(gh run list --workflow=orchestrate-api.yaml --status=queued \
+              --limit=100 --json=databaseId --jq='length' 2>/dev/null || echo 0)
+            total=$((p_run + p_queue + o_run + o_queue))
+            if [ "$total" -eq 0 ]; then
+              echo "promote-api and orchestrate-api are idle; safe to seed and publish"
+              break
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::promote-api/orchestrate-api did not quiesce within the timeout (promote in_progress=$p_run queued=$p_queue; orchestrate in_progress=$o_run queued=$o_queue)"
+              exit 1
+            fi
+            echo "waiting for quiesce: promote in_progress=$p_run queued=$p_queue; orchestrate in_progress=$o_run queued=$o_queue"
+            sleep 30
+          done
+
       # Seed a fresh web dev rc so the web tag namespace holds an unpublished rc
       # that MUST survive the api publish below. cascade's rc-tag reaper is scoped
       # to a component's own tag_prefix, so publishing api can only reap api-*-rc.*.
@@ -2157,11 +2193,18 @@ jobs:
         run: |
           set -euo pipefail
           # The publish deletes rc release objects and their tags; refresh the
-          # local tag view against the remote (prune stale, fetch current).
-          for _ in 1 2 3 4 5; do
+          # local tag view against the remote (prune stale, fetch current). The
+          # reaper deletes tags at the end of a promotion that walks every
+          # environment, so give it a bounded ~12 minutes to converge rather than
+          # the previous 2.5 minutes, which could close before the single publish
+          # finished reaping.
+          API_RC=0
+          deadline=$(( $(date +%s) + 720 ))
+          while :; do
             git fetch origin --tags --prune --force --quiet
             API_RC=$(git ls-remote --tags origin 'api-*-rc.*' | wc -l | tr -d ' ')
             [ "$API_RC" -eq 0 ] && break
+            [ "$(date +%s)" -ge "$deadline" ] && break
             sleep 30
           done
           if [ "$API_RC" -ne 0 ]; then
