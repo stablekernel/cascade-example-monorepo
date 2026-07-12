@@ -1,118 +1,118 @@
 ci:
-    config:
-        schema_version: 1
-        trunk_branch: main
-        environments:
-            - dev
-            - staging
-            - prod
-        cli_version: v0.15.0-rc.0
-        cli_version_sha: 090e765ba8b485767d60c70f222605fee44fff50
-        state_token: ${{ secrets.CASCADE_STATE_TOKEN }}
-        manifest_file: .github/manifest.yaml
-        manifest_key: ci
-        shared_paths:
-            - libs/common/**
+  config:
+    schema_version: 1
+    trunk_branch: main
+    environments:
+      - dev
+      - staging
+      - prod
+    cli_version: v0.15.0-rc.0
+    cli_version_sha: 090e765ba8b485767d60c70f222605fee44fff50
+    state_token: ${{ secrets.CASCADE_STATE_TOKEN }}
+    manifest_file: .github/manifest.yaml
+    manifest_key: ci
+    shared_paths:
+      - libs/common/**
+    components:
+      api:
+        path: services/api
+        tag_grammar:
+          prefix: api-
+        builds:
+          - name: api
+            workflow: .github/workflows/build-api.yaml
+            triggers:
+              - services/api/**
+        deploys:
+          - name: api
+            workflow: .github/workflows/deploy-api.yaml
+            triggers:
+              - services/api/**
+      web:
+        path: apps/web
+        tag_grammar:
+          prefix: web-
+        builds:
+          - name: web
+            workflow: .github/workflows/build-web.yaml
+            triggers:
+              - apps/web/**
+        deploys:
+          - name: web
+            workflow: .github/workflows/deploy-web.yaml
+            triggers:
+              - apps/web/**
+  state:
+    components:
+      api:
+        dev:
+          sha: e3646f93f43d4b11daff612253c82e9dde008bb2
+          version: api-0.2.0-rc.2
+          committed_at: "2026-07-12T06:08:19Z"
+          committed_by: joshua-temple
+        staging:
+          sha: e3646f93f43d4b11daff612253c82e9dde008bb2
+          version: api-0.2.0-rc.2
+          committed_at: "2026-07-12T06:13:12Z"
+          committed_by: joshua-temple
+        release:
+          sha: e3646f93f43d4b11daff612253c82e9dde008bb2
+          version: api-0.2.0
+          committed_at: "2026-07-12T06:13:12Z"
+          committed_by: joshua-temple
+        prod:
+          sha: e3646f93f43d4b11daff612253c82e9dde008bb2
+          version: api-0.2.0
+          committed_at: "2026-07-12T06:13:12Z"
+          committed_by: joshua-temple
+      web:
+        dev:
+          sha: 119c2a9967f09d01486657da63109b5232ed0530
+          version: web-0.2.0-rc.1
+          committed_at: "2026-07-12T06:15:06Z"
+          committed_by: joshua-temple
+        staging:
+          sha: c382bce0ae743e87767adbff10f4a57ee0f45e7e
+          version: web-0.1.0-rc.0
+          committed_at: "2026-07-12T05:59:12Z"
+          committed_by: joshua-temple
+        release:
+          sha: c382bce0ae743e87767adbff10f4a57ee0f45e7e
+          version: web-0.1.0
+          committed_at: "2026-07-12T06:00:22Z"
+          committed_by: joshua-temple
+        prod:
+          sha: c382bce0ae743e87767adbff10f4a57ee0f45e7e
+          version: web-0.1.0
+          committed_at: "2026-07-12T06:00:22Z"
+          committed_by: joshua-temple
+  latest_release:
+    components:
+      api:
+        version: api-0.2.0
+        sha: e3646f93f43d4b11daff612253c82e9dde008bb2
+        released_on: "2026-07-12T06:13:12Z"
+        released_by: joshua-temple
         components:
-            api:
-                path: services/api
-                tag_grammar:
-                    prefix: api-
-                builds:
-                    - name: api
-                      workflow: .github/workflows/build-api.yaml
-                      triggers:
-                        - services/api/**
-                deploys:
-                    - name: api
-                      workflow: .github/workflows/deploy-api.yaml
-                      triggers:
-                        - services/api/**
-            web:
-                path: apps/web
-                tag_grammar:
-                    prefix: web-
-                builds:
-                    - name: web
-                      workflow: .github/workflows/build-web.yaml
-                      triggers:
-                        - apps/web/**
-                deploys:
-                    - name: web
-                      workflow: .github/workflows/deploy-web.yaml
-                      triggers:
-                        - apps/web/**
-    state:
+          api:
+            version: api-0.2.0
+            sha: e3646f93f43d4b11daff612253c82e9dde008bb2
+            released_on: "2026-07-12T06:10:56Z"
+          web:
+            version: web-0.1.0
+            sha: c382bce0ae743e87767adbff10f4a57ee0f45e7e
+            released_on: "2026-07-12T06:00:22Z"
+      web:
+        version: web-0.1.0
+        sha: c382bce0ae743e87767adbff10f4a57ee0f45e7e
+        released_on: "2026-07-12T06:00:22Z"
+        released_by: joshua-temple
         components:
-            api:
-                dev:
-                    sha: e3646f93f43d4b11daff612253c82e9dde008bb2
-                    version: api-0.2.0-rc.2
-                    committed_at: "2026-07-12T06:08:19Z"
-                    committed_by: joshua-temple
-                staging:
-                    sha: e3646f93f43d4b11daff612253c82e9dde008bb2
-                    version: api-0.2.0-rc.2
-                    committed_at: "2026-07-12T06:13:12Z"
-                    committed_by: joshua-temple
-                release:
-                    sha: e3646f93f43d4b11daff612253c82e9dde008bb2
-                    version: api-0.2.0
-                    committed_at: "2026-07-12T06:13:12Z"
-                    committed_by: joshua-temple
-                prod:
-                    sha: e3646f93f43d4b11daff612253c82e9dde008bb2
-                    version: api-0.2.0
-                    committed_at: "2026-07-12T06:13:12Z"
-                    committed_by: joshua-temple
-            web:
-                dev:
-                    sha: 86458bc213ab327e63d461880907d8f7507ddbc3
-                    version: web-0.2.0-rc.0
-                    committed_at: "2026-07-12T06:01:54Z"
-                    committed_by: joshua-temple
-                staging:
-                    sha: c382bce0ae743e87767adbff10f4a57ee0f45e7e
-                    version: web-0.1.0-rc.0
-                    committed_at: "2026-07-12T05:59:12Z"
-                    committed_by: joshua-temple
-                release:
-                    sha: c382bce0ae743e87767adbff10f4a57ee0f45e7e
-                    version: web-0.1.0
-                    committed_at: "2026-07-12T06:00:22Z"
-                    committed_by: joshua-temple
-                prod:
-                    sha: c382bce0ae743e87767adbff10f4a57ee0f45e7e
-                    version: web-0.1.0
-                    committed_at: "2026-07-12T06:00:22Z"
-                    committed_by: joshua-temple
-    latest_release:
-        components:
-            api:
-                version: api-0.2.0
-                sha: e3646f93f43d4b11daff612253c82e9dde008bb2
-                released_on: "2026-07-12T06:13:12Z"
-                released_by: joshua-temple
-                components:
-                    api:
-                        version: api-0.2.0
-                        sha: e3646f93f43d4b11daff612253c82e9dde008bb2
-                        released_on: "2026-07-12T06:10:56Z"
-                    web:
-                        version: web-0.1.0
-                        sha: c382bce0ae743e87767adbff10f4a57ee0f45e7e
-                        released_on: "2026-07-12T06:00:22Z"
-            web:
-                version: web-0.1.0
-                sha: c382bce0ae743e87767adbff10f4a57ee0f45e7e
-                released_on: "2026-07-12T06:00:22Z"
-                released_by: joshua-temple
-                components:
-                    api:
-                        version: api-0.1.0
-                        sha: 9282a3def05fd26547c7dcc5e0feebc904fb09ae
-                        released_on: "2026-07-12T05:56:50Z"
-                    web:
-                        version: web-0.1.0
-                        sha: 8519f8c9d6a336fa68b55503b2f36978ce435142
-                        released_on: "2026-07-11T15:17:20Z"
+          api:
+            version: api-0.1.0
+            sha: 9282a3def05fd26547c7dcc5e0feebc904fb09ae
+            released_on: "2026-07-12T05:56:50Z"
+          web:
+            version: web-0.1.0
+            sha: 8519f8c9d6a336fa68b55503b2f36978ce435142
+            released_on: "2026-07-11T15:17:20Z"
