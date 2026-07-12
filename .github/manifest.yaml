@@ -53,25 +53,18 @@ ci:
                 staging:
                     sha: e3646f93f43d4b11daff612253c82e9dde008bb2
                     version: api-0.2.0-rc.2
-                    committed_at: "2026-07-12T06:10:56Z"
+                    committed_at: "2026-07-12T06:13:12Z"
                     committed_by: joshua-temple
                 release:
                     sha: e3646f93f43d4b11daff612253c82e9dde008bb2
                     version: api-0.2.0
-                    committed_at: "2026-07-12T06:10:56Z"
+                    committed_at: "2026-07-12T06:13:12Z"
                     committed_by: joshua-temple
                 prod:
-                    sha: 9f857a3cf319556b51069d1caf1055f38f8c2f85
-                    version: api-0.1.1
-                    committed_at: "2026-07-12T06:12:35Z"
+                    sha: e3646f93f43d4b11daff612253c82e9dde008bb2
+                    version: api-0.2.0
+                    committed_at: "2026-07-12T06:13:12Z"
                     committed_by: joshua-temple
-                    ref: rollback/api/prod
-                    base_sha: e3646f93f43d4b11daff612253c82e9dde008bb2
-                    previous:
-                        - sha: e3646f93f43d4b11daff612253c82e9dde008bb2
-                          version: api-0.2.0
-                          committed_at: "2026-07-12T06:10:56Z"
-                          committed_by: joshua-temple
             web:
                 dev:
                     sha: 86458bc213ab327e63d461880907d8f7507ddbc3
@@ -98,13 +91,13 @@ ci:
             api:
                 version: api-0.2.0
                 sha: e3646f93f43d4b11daff612253c82e9dde008bb2
-                released_on: "2026-07-12T06:10:56Z"
+                released_on: "2026-07-12T06:13:12Z"
                 released_by: joshua-temple
                 components:
                     api:
-                        version: api-0.1.0
-                        sha: 9282a3def05fd26547c7dcc5e0feebc904fb09ae
-                        released_on: "2026-07-12T05:56:50Z"
+                        version: api-0.2.0
+                        sha: e3646f93f43d4b11daff612253c82e9dde008bb2
+                        released_on: "2026-07-12T06:10:56Z"
                     web:
                         version: web-0.1.0
                         sha: c382bce0ae743e87767adbff10f4a57ee0f45e7e
