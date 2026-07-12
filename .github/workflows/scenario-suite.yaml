@@ -11,7 +11,7 @@ name: Scenario Suite - Monorepo Per-Component Independence
 # ladder while asserting web's state subtree and tag namespace stay empty, then
 # advances web and asserts api's already-published state is preserved untouched.
 # Each component records under only its own state.components.<name> subtree and
-# reads and writes only its own tag_prefix namespace.
+# reads and writes only its own tag_grammar.prefix namespace.
 
 on:
   workflow_dispatch:
@@ -2051,7 +2051,7 @@ jobs:
 
       # Seed a fresh web dev rc so the web tag namespace holds an unpublished rc
       # that MUST survive the api publish below. cascade's rc-tag reaper is scoped
-      # to a component's own tag_prefix, so publishing api can only reap api-*-rc.*.
+      # to a component's own tag_grammar.prefix, so publishing api can only reap api-*-rc.*.
       - name: Seed a fresh web dev rc
         id: seed_web
         env:
