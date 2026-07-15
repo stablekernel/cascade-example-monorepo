@@ -51,38 +51,20 @@ ci:
                     committed_at: "2026-07-15T23:02:15Z"
                     committed_by: joshua-temple
                 staging:
-                    sha: 43690e0b330c837308d7d8bf649f27d014d066bb
-                    version: api-0.2.0-rc.1.hotfix.1
-                    committed_at: "2026-07-15T23:03:48Z"
+                    sha: ea1072507750e1a04eb8bf0740ee7e970fe242eb
+                    version: api-0.2.0-rc.2
+                    committed_at: "2026-07-15T23:05:04Z"
                     committed_by: joshua-temple
-                    ref: env/api/staging
-                    base_sha: 8ab9afad222110ebd0ad77de1e5f31825863dd3b
-                    patches:
-                        - ea1072507750e1a04eb8bf0740ee7e970fe242eb
-                    previous:
-                        - sha: 8ab9afad222110ebd0ad77de1e5f31825863dd3b
-                          version: api-0.2.0-rc.1
-                          committed_at: "2026-07-15T23:00:29Z"
-                          committed_by: joshua-temple
                 release:
-                    sha: 9eb43c48728a7210a931e8df3ca7ccaf15de299c
-                    version: api-0.1.0
-                    committed_at: "2026-07-15T22:50:42Z"
+                    sha: ea1072507750e1a04eb8bf0740ee7e970fe242eb
+                    version: api-0.2.0
+                    committed_at: "2026-07-15T23:05:04Z"
                     committed_by: joshua-temple
                 prod:
-                    sha: 4a37be5527f8e7e713756aa775d1ce1b8216ce0f
-                    version: api-0.1.1
-                    committed_at: "2026-07-15T23:04:21Z"
+                    sha: ea1072507750e1a04eb8bf0740ee7e970fe242eb
+                    version: api-0.2.0
+                    committed_at: "2026-07-15T23:05:04Z"
                     committed_by: joshua-temple
-                    ref: env/api/prod
-                    base_sha: 9eb43c48728a7210a931e8df3ca7ccaf15de299c
-                    patches:
-                        - ea1072507750e1a04eb8bf0740ee7e970fe242eb
-                    previous:
-                        - sha: 9eb43c48728a7210a931e8df3ca7ccaf15de299c
-                          version: api-0.1.0
-                          committed_at: "2026-07-15T22:50:42Z"
-                          committed_by: joshua-temple
             web:
                 dev:
                     sha: 0a22e01646f693631ee82580e52382432ae29a9a
@@ -107,19 +89,19 @@ ci:
     latest_release:
         components:
             api:
-                version: api-0.1.0
-                sha: 9eb43c48728a7210a931e8df3ca7ccaf15de299c
-                released_on: "2026-07-15T22:50:42Z"
+                version: api-0.2.0
+                sha: ea1072507750e1a04eb8bf0740ee7e970fe242eb
+                released_on: "2026-07-15T23:05:04Z"
                 released_by: joshua-temple
                 components:
                     api:
-                        version: api-0.3.0
-                        sha: 40b849fbe4a226a7ecb32a49b6dd55fe3cf21582
-                        released_on: "2026-07-13T10:10:12Z"
+                        version: api-0.1.0
+                        sha: 9eb43c48728a7210a931e8df3ca7ccaf15de299c
+                        released_on: "2026-07-15T22:50:42Z"
                     web:
                         version: web-0.1.0
-                        sha: 4f1a3673ea0ad5e5bfcfb60ae3ec1bb804d88384
-                        released_on: "2026-07-13T09:52:51Z"
+                        sha: fd284568c489e92909b3a3e76d52297e885128f1
+                        released_on: "2026-07-15T22:54:17Z"
             web:
                 version: web-0.1.0
                 sha: fd284568c489e92909b3a3e76d52297e885128f1
