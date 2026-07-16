@@ -51,15 +51,15 @@ ci:
                     committed_at: "2026-07-16T09:38:36Z"
                     committed_by: joshua-temple
                 staging:
-                    sha: 40e108f7b484e46defe33e535a33a47fb8d029a1
-                    version: api-0.2.0-rc.1.hotfix.1
-                    committed_at: "2026-07-16T09:40:00Z"
+                    sha: a070487877339986fe5da0ec849e0a5bcf05487d
+                    version: api-0.2.0-rc.2
+                    committed_at: "2026-07-16T09:42:25Z"
                     committed_by: joshua-temple
-                    ref: env/api/staging
-                    base_sha: 1d12c26c88a7c998753d8de7de3d9c9afb59f06e
-                    patches:
-                        - a070487877339986fe5da0ec849e0a5bcf05487d
                     previous:
+                        - sha: 40e108f7b484e46defe33e535a33a47fb8d029a1
+                          version: api-0.2.0-rc.1.hotfix.1
+                          committed_at: "2026-07-16T09:40:00Z"
+                          committed_by: joshua-temple
                         - sha: 1d12c26c88a7c998753d8de7de3d9c9afb59f06e
                           version: api-0.2.0-rc.1
                           committed_at: "2026-07-16T09:36:39Z"
@@ -73,20 +73,25 @@ ci:
                           committed_at: "2026-07-16T09:25:50Z"
                           committed_by: joshua-temple
                 release:
-                    sha: fd02eb095d230a03d4ef84dc0bdc60ee97b637d7
-                    version: api-0.1.0
-                    committed_at: "2026-07-16T09:26:58Z"
+                    sha: a070487877339986fe5da0ec849e0a5bcf05487d
+                    version: api-0.2.0
+                    committed_at: "2026-07-16T09:42:25Z"
                     committed_by: joshua-temple
-                prod:
-                    sha: 3b31571e2a12c32608fee514ed1e4484235840af
-                    version: api-0.1.1
-                    committed_at: "2026-07-16T09:40:44Z"
-                    committed_by: joshua-temple
-                    ref: env/api/prod
-                    base_sha: fd02eb095d230a03d4ef84dc0bdc60ee97b637d7
-                    patches:
-                        - a070487877339986fe5da0ec849e0a5bcf05487d
                     previous:
+                        - sha: fd02eb095d230a03d4ef84dc0bdc60ee97b637d7
+                          version: api-0.1.0
+                          committed_at: "2026-07-16T09:26:58Z"
+                          committed_by: joshua-temple
+                prod:
+                    sha: a070487877339986fe5da0ec849e0a5bcf05487d
+                    version: api-0.2.0
+                    committed_at: "2026-07-16T09:42:25Z"
+                    committed_by: joshua-temple
+                    previous:
+                        - sha: 3b31571e2a12c32608fee514ed1e4484235840af
+                          version: api-0.1.1
+                          committed_at: "2026-07-16T09:40:44Z"
+                          committed_by: joshua-temple
                         - sha: fd02eb095d230a03d4ef84dc0bdc60ee97b637d7
                           version: api-0.1.0
                           committed_at: "2026-07-16T09:26:58Z"
@@ -115,9 +120,9 @@ ci:
     latest_release:
         components:
             api:
-                version: api-0.1.0
-                sha: fd02eb095d230a03d4ef84dc0bdc60ee97b637d7
-                released_on: "2026-07-16T09:26:58Z"
+                version: api-0.2.0
+                sha: a070487877339986fe5da0ec849e0a5bcf05487d
+                released_on: "2026-07-16T09:42:25Z"
             web:
                 version: web-0.1.0
                 sha: d208ae6f29b85b697f852353db2d817eb01da237
