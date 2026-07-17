@@ -66,12 +66,28 @@ ci:
                             version: api-0.1.0-rc.0
                             deployed_at: "2026-07-17T00:30:50Z"
                             deployed_by: joshua-temple
+                release:
+                    sha: 335d15c185ddebbcaf95410b5ecd807f5ea40732
+                    version: api-0.1.0
+                    committed_at: "2026-07-17T00:31:50Z"
+                    committed_by: joshua-temple
+                prod:
+                    sha: 335d15c185ddebbcaf95410b5ecd807f5ea40732
+                    version: api-0.1.0
+                    committed_at: "2026-07-17T00:31:50Z"
+                    committed_by: joshua-temple
+                    deploys:
+                        api:
+                            sha: 335d15c185ddebbcaf95410b5ecd807f5ea40732
+                            version: api-0.1.0
+                            deployed_at: "2026-07-17T00:31:50Z"
+                            deployed_by: joshua-temple
     latest_release:
         components:
             api:
-                version: api-0.3.0
-                sha: fd225f4e4e2aa2f81b5e3412936e65196eef0bda
-                released_on: "2026-07-16T19:52:47Z"
+                version: api-0.1.0
+                sha: 335d15c185ddebbcaf95410b5ecd807f5ea40732
+                released_on: "2026-07-17T00:31:50Z"
             web:
                 version: web-0.1.0
                 sha: 1528a6e3a75969712633fb3fcb463c33e6030b7f
