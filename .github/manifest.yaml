@@ -84,14 +84,14 @@ ci:
               deployed_by: joshua-temple
       web:
         dev:
-          sha: fe9dc8fe415475eebb1ff3846e1e2f3efb5c86db
-          version: web-0.1.0-rc.0
-          committed_at: "2026-07-19T15:29:21Z"
+          sha: ec71f97b941974812c3f4d82c82a0c31abd45554
+          version: web-0.2.0-rc.0
+          committed_at: "2026-07-19T15:32:49Z"
           committed_by: joshua-temple
           deploys:
             web:
-              sha: fe9dc8fe415475eebb1ff3846e1e2f3efb5c86db
-              deployed_at: "2026-07-19T15:29:21Z"
+              sha: ec71f97b941974812c3f4d82c82a0c31abd45554
+              deployed_at: "2026-07-19T15:32:49Z"
               deployed_by: joshua-temple
         staging:
           sha: fe9dc8fe415475eebb1ff3846e1e2f3efb5c86db
