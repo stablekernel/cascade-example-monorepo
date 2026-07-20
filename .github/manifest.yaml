@@ -46,14 +46,14 @@ ci:
     components:
       api:
         dev:
-          sha: a898175ad45e438c728adc3548c32092cc1db153
-          version: api-0.2.0-rc.0
-          committed_at: "2026-07-20T17:28:36Z"
+          sha: 701fd40b46e0daa450dbb4fe7632bb2d80761171
+          version: api-0.2.0-rc.1
+          committed_at: "2026-07-20T17:31:20Z"
           committed_by: joshua-temple
           deploys:
             api:
-              sha: a898175ad45e438c728adc3548c32092cc1db153
-              deployed_at: "2026-07-20T17:28:36Z"
+              sha: 701fd40b46e0daa450dbb4fe7632bb2d80761171
+              deployed_at: "2026-07-20T17:31:20Z"
               deployed_by: joshua-temple
         staging:
           sha: 1c1fdd6de5dd1109e2da01675a7ded58ae88556e
