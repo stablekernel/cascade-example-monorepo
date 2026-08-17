@@ -56,21 +56,21 @@ ci:
                             deployed_at: "2026-08-17T06:29:39Z"
                             deployed_by: joshua-temple
                 staging:
-                    sha: c527aeab05e1a21413d95a04b67fd1ae8dd4ad7f
-                    version: api-0.1.0-rc.0.hotfix.1
-                    committed_at: "2026-08-17T06:31:08Z"
+                    sha: 532544e3186a264c4596423aea4908fc1372f8fc
+                    version: api-0.2.0-rc.1
+                    committed_at: "2026-08-17T06:32:52Z"
                     committed_by: joshua-temple
                     deploys:
                         api:
-                            sha: b0963d60bb0eeba0d09a90c2d259990fc19d3adf
-                            version: api-0.1.0-rc.0
-                            deployed_at: "2026-08-17T06:22:01Z"
+                            sha: 532544e3186a264c4596423aea4908fc1372f8fc
+                            version: api-0.2.0-rc.1
+                            deployed_at: "2026-08-17T06:32:52Z"
                             deployed_by: joshua-temple
-                    ref: env/api/staging
-                    base_sha: b0963d60bb0eeba0d09a90c2d259990fc19d3adf
-                    patches:
-                        - 532544e3186a264c4596423aea4908fc1372f8fc
                     previous:
+                        - sha: c527aeab05e1a21413d95a04b67fd1ae8dd4ad7f
+                          version: api-0.1.0-rc.0.hotfix.1
+                          committed_at: "2026-08-17T06:31:08Z"
+                          committed_by: joshua-temple
                         - sha: b0963d60bb0eeba0d09a90c2d259990fc19d3adf
                           version: api-0.1.0-rc.0
                           committed_at: "2026-08-17T06:22:01Z"
