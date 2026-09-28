@@ -56,21 +56,21 @@ ci:
                             deployed_at: "2026-09-28T07:02:08Z"
                             deployed_by: joshua-temple
                 staging:
-                    sha: 32329e83a20737ff298602d969da9e73e4916164
-                    version: api-0.2.0-rc.1.hotfix.1
-                    committed_at: "2026-09-28T07:04:53Z"
+                    sha: 9a869fd34017a1673ab1d9ab7dd92e5b5e2e6ae0
+                    version: api-0.2.0-rc.2
+                    committed_at: "2026-09-28T07:07:05Z"
                     committed_by: joshua-temple
                     deploys:
                         api:
-                            sha: ad21543ee02554760d241623f27540128b857723
-                            version: api-0.2.0-rc.1
-                            deployed_at: "2026-09-28T07:00:09Z"
+                            sha: 9a869fd34017a1673ab1d9ab7dd92e5b5e2e6ae0
+                            version: api-0.2.0-rc.2
+                            deployed_at: "2026-09-28T07:07:05Z"
                             deployed_by: joshua-temple
-                    ref: env/api/staging
-                    base_sha: ad21543ee02554760d241623f27540128b857723
-                    patches:
-                        - 9a869fd34017a1673ab1d9ab7dd92e5b5e2e6ae0
                     previous:
+                        - sha: 32329e83a20737ff298602d969da9e73e4916164
+                          version: api-0.2.0-rc.1.hotfix.1
+                          committed_at: "2026-09-28T07:04:53Z"
+                          committed_by: joshua-temple
                         - sha: ad21543ee02554760d241623f27540128b857723
                           version: api-0.2.0-rc.1
                           committed_at: "2026-09-28T07:00:09Z"
@@ -84,26 +84,31 @@ ci:
                           committed_at: "2026-09-28T06:49:08Z"
                           committed_by: joshua-temple
                 release:
-                    sha: 88d72d1bbde93289e95da5adbf76edf03c9efeb3
-                    version: api-0.1.0
-                    committed_at: "2026-09-28T06:50:06Z"
+                    sha: 9a869fd34017a1673ab1d9ab7dd92e5b5e2e6ae0
+                    version: api-0.2.0
+                    committed_at: "2026-09-28T07:07:05Z"
                     committed_by: joshua-temple
+                    previous:
+                        - sha: 88d72d1bbde93289e95da5adbf76edf03c9efeb3
+                          version: api-0.1.0
+                          committed_at: "2026-09-28T06:50:06Z"
+                          committed_by: joshua-temple
                 prod:
-                    sha: 807b8fc7c07f30a3ea7e27f9c1261141581302bd
-                    version: api-0.1.1
-                    committed_at: "2026-09-28T07:05:23Z"
+                    sha: 9a869fd34017a1673ab1d9ab7dd92e5b5e2e6ae0
+                    version: api-0.2.0
+                    committed_at: "2026-09-28T07:07:05Z"
                     committed_by: joshua-temple
                     deploys:
                         api:
-                            sha: 88d72d1bbde93289e95da5adbf76edf03c9efeb3
-                            version: api-0.1.0
-                            deployed_at: "2026-09-28T06:50:06Z"
+                            sha: 9a869fd34017a1673ab1d9ab7dd92e5b5e2e6ae0
+                            version: api-0.2.0
+                            deployed_at: "2026-09-28T07:07:05Z"
                             deployed_by: joshua-temple
-                    ref: env/api/prod
-                    base_sha: 88d72d1bbde93289e95da5adbf76edf03c9efeb3
-                    patches:
-                        - 9a869fd34017a1673ab1d9ab7dd92e5b5e2e6ae0
                     previous:
+                        - sha: 807b8fc7c07f30a3ea7e27f9c1261141581302bd
+                          version: api-0.1.1
+                          committed_at: "2026-09-28T07:05:23Z"
+                          committed_by: joshua-temple
                         - sha: 88d72d1bbde93289e95da5adbf76edf03c9efeb3
                           version: api-0.1.0
                           committed_at: "2026-09-28T06:50:06Z"
@@ -149,9 +154,9 @@ ci:
     latest_release:
         components:
             api:
-                version: api-0.1.0
-                sha: 88d72d1bbde93289e95da5adbf76edf03c9efeb3
-                released_on: "2026-09-28T06:50:06Z"
+                version: api-0.2.0
+                sha: 9a869fd34017a1673ab1d9ab7dd92e5b5e2e6ae0
+                released_on: "2026-09-28T07:07:05Z"
             web:
                 version: web-0.1.0
                 sha: 1f9edbd3a45c38543ed0432fb2813d9e330d5910
