@@ -89,9 +89,9 @@ ci:
                     committed_at: "2026-11-16T06:36:55Z"
                     committed_by: joshua-temple
                 prod:
-                    sha: 1cda01f3044f7f9b701c00f4662bfcf9089efbfb
-                    version: api-0.1.0
-                    committed_at: "2026-11-16T06:36:55Z"
+                    sha: 6eb0e1de178e46f5cfd975e07bcb9869d5178619
+                    version: api-0.1.1
+                    committed_at: "2026-11-16T06:51:42Z"
                     committed_by: joshua-temple
                     deploys:
                         api:
@@ -99,6 +99,15 @@ ci:
                             version: api-0.1.0
                             deployed_at: "2026-11-16T06:36:55Z"
                             deployed_by: joshua-temple
+                    ref: env/api/prod
+                    base_sha: 1cda01f3044f7f9b701c00f4662bfcf9089efbfb
+                    patches:
+                        - 8f24a4ee56328af21235bc3480d104d8be7b0d27
+                    previous:
+                        - sha: 1cda01f3044f7f9b701c00f4662bfcf9089efbfb
+                          version: api-0.1.0
+                          committed_at: "2026-11-16T06:36:55Z"
+                          committed_by: joshua-temple
             web:
                 dev:
                     sha: 7f29f333b77385cb4f3a15636a7993b489cc4f56
