@@ -58,13 +58,13 @@ ci:
                 staging:
                     sha: ad1953dfcd7bcf55c863053507426d95c314d18a
                     version: api-0.2.0-rc.2
-                    committed_at: "2026-11-20T10:16:01Z"
+                    committed_at: "2026-11-20T10:18:08Z"
                     committed_by: joshua-temple
                     deploys:
                         api:
                             sha: ad1953dfcd7bcf55c863053507426d95c314d18a
                             version: api-0.2.0-rc.2
-                            deployed_at: "2026-11-20T10:16:01Z"
+                            deployed_at: "2026-11-20T10:18:08Z"
                             deployed_by: joshua-temple
                     previous:
                         - sha: 6b216d31396c81df4c7a25fd15bbe26ac81940a0
@@ -86,7 +86,7 @@ ci:
                 release:
                     sha: ad1953dfcd7bcf55c863053507426d95c314d18a
                     version: api-0.2.0
-                    committed_at: "2026-11-20T10:16:01Z"
+                    committed_at: "2026-11-20T10:18:08Z"
                     committed_by: joshua-temple
                     previous:
                         - sha: 9e162295e3fd9121f801359fbcd20202530d3eb2
@@ -94,19 +94,21 @@ ci:
                           committed_at: "2026-11-20T09:58:58Z"
                           committed_by: joshua-temple
                 prod:
-                    sha: 81a339bd8a0a4a30cd57b3722ce64a4d5c311adf
-                    version: api-0.1.1
-                    committed_at: "2026-11-20T10:17:24Z"
+                    sha: ad1953dfcd7bcf55c863053507426d95c314d18a
+                    version: api-0.2.0
+                    committed_at: "2026-11-20T10:18:08Z"
                     committed_by: joshua-temple
                     deploys:
                         api:
-                            sha: 81a339bd8a0a4a30cd57b3722ce64a4d5c311adf
-                            version: api-0.1.1
-                            deployed_at: "2026-11-20T10:17:24Z"
+                            sha: ad1953dfcd7bcf55c863053507426d95c314d18a
+                            version: api-0.2.0
+                            deployed_at: "2026-11-20T10:18:08Z"
                             deployed_by: joshua-temple
-                    ref: rollback/api/prod
-                    base_sha: ad1953dfcd7bcf55c863053507426d95c314d18a
                     previous:
+                        - sha: 81a339bd8a0a4a30cd57b3722ce64a4d5c311adf
+                          version: api-0.1.1
+                          committed_at: "2026-11-20T10:17:24Z"
+                          committed_by: joshua-temple
                         - sha: ad1953dfcd7bcf55c863053507426d95c314d18a
                           version: api-0.2.0
                           committed_at: "2026-11-20T10:16:01Z"
@@ -162,7 +164,7 @@ ci:
             api:
                 version: api-0.2.0
                 sha: ad1953dfcd7bcf55c863053507426d95c314d18a
-                released_on: "2026-11-20T10:16:01Z"
+                released_on: "2026-11-20T10:18:08Z"
             web:
                 version: web-0.1.0
                 sha: 694a566aeee73864ea6d8e134775c86f0d03062c
